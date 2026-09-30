@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isLoggedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+    
+    function isGuard() {
+      return isLoggedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'guard' && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+    
+    function isDevice(type) {
+      return isLoggedIn() && 
+             exists(/databases/$(database)/documents/devices/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.type == type && 
+             get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.status == 'active';
+    }
+    
+    function isActiveDevice() {
+      return isLoggedIn() && 
+             exists(/databases/$(database)/documents/devices/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // ============================================================
+    // COLLECTION RULES
+    // ============================================================
+
+    match /users/{userId} {
+      // Admins can read/write all. Users can read their own.
+      allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == userId);
+      allow write: if isAdmin();
+    }
+
+    match /devices/{deviceId} {
+      // Admins can read/write all. Devices can read their own.
+      allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == deviceId);
+      allow write: if isAdmin();
+    }
+
+    match /visitors/{visitorId} {
+      // Visitors (anonymous) can create only (and read their own data via client state if needed, though mostly write-only).
+      // Guards and Admins can read. Admins can update for data retention purging.
+      allow create: if isLoggedIn(); 
+      allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
+      allow update: if isAdmin();
+      allow delete: if false; // Retention purge is an update to imagesPurgedAt, not delete
+    }
+
+    match /gatePasses/{passId} {
+      // Visitors can create and read their own.
+      // Entry devices update to 'pending'.
+      // Guards can read, update to 'inside'/'rejected'.
+      // Exit devices update to 'exited'.
+      // Admins can read all.
+      
+      allow create: if isLoggedIn() && request.resource.data.visitorId != null;
+      allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
+      
+      allow update: if 
+        isAdmin() || 
+        (isDevice('entry') && request.resource.data.status == 'pending') ||
+        (isDevice('exit') && request.resource.data.status == 'exited') ||
+        (isDevice('kiosk')) || // kiosk might directly approve depending on peak mode, but typically 'issued'
+        (isGuard() && request.resource.data.status in ['inside', 'rejected']);
+        
+      allow delete: if false;
+    }
+
+    match /visitLogs/{logId} {
+      // Devices and Guards can create. Admins can read. No one can update/delete.
+      allow create: if isActiveDevice() || isGuard();
+      allow read: if isAdmin() || isGuard();
+      allow update, delete: if false;
+    }
+
+    match /settings/app {
+      // Everyone (including anonymous) can read settings (e.g. working hours). Admins can update.
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      // Admins can read and create. No one can delete.
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

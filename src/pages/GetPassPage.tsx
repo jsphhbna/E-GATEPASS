@@ -1,0 +1,1035 @@
+import { useState, useRef, useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { signInAnonymously } from 'firebase/auth';
+import { doc, setDoc, getDoc, serverTimestamp, Timestamp, collection } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
+import { useWebcam } from '@/hooks/useWebcam';
+import { compressImageToWebP, uploadToCloudinary } from '@/lib/cloudinary';
+import { toDataURL } from 'qrcode';
+import {
+  Camera,
+  Upload,
+  CheckCircle2,
+  Download,
+  ArrowLeft,
+  ArrowRight,
+  Shield,
+  AlertCircle,
+  X,
+  RotateCcw,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { format, parse, startOfDay, set as setDate } from 'date-fns';
+
+// ============================================================
+// FORM SCHEMA (Zod)
+// ============================================================
+const getPassSchema = z.object({
+  fullName: z
+    .string()
+    .min(2, 'Full name must be at least 2 characters')
+    .max(100, 'Full name is too long'),
+  contactNumber: z
+    .string()
+    .min(7, 'Contact number must be at least 7 digits')
+    .max(15, 'Contact number is too long')
+    .regex(/^[0-9+\-() ]+$/, 'Invalid contact number format'),
+  purpose: z
+    .string()
+    .min(3, 'Please describe your purpose')
+    .max(300, 'Purpose description is too long'),
+  visitDate: z.string().min(1, 'Please select a visit date'),
+  consent: z.literal(true, {
+    message: 'You must accept the Data Privacy Act notice to proceed',
+  }),
+});
+
+type GetPassFormData = z.infer<typeof getPassSchema>;
+
+type Step = 'form' | 'photo' | 'id' | 'review' | 'generating' | 'done';
+
+// ============================================================
+// COMPONENT
+// ============================================================
+export function GetPassPage() {
+  const [step, setStep] = useState<Step>('form');
+  const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [idBlob, setIdBlob] = useState<Blob | null>(null);
+  const [idPreview, setIdPreview] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [passId, setPassId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isPeakMode, setIsPeakMode] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    getDoc(doc(db, 'settings', 'app')).then((docSnap) => {
+      if (docSnap.exists() && docSnap.data().peakMode) {
+        setIsPeakMode(true);
+      }
+    });
+  }, []);
+
+  const webcam = useWebcam({ facingMode: 'user' });
+
+  const {
+    register,
+    handleSubmit,
+    getValues,
+    formState: { errors, isValid },
+  } = useForm<GetPassFormData>({
+    resolver: zodResolver(getPassSchema),
+    mode: 'onChange',
+  });
+
+  // Get today as min date
+  const today = format(new Date(), 'yyyy-MM-dd');
+
+  // ============================================================
+  // STEP HANDLERS
+  // ============================================================
+
+  function onFormNext(data: GetPassFormData) {
+    // Form is valid, move to photo step
+    void data;
+    setStep('photo');
+    webcam.start();
+  }
+
+  function onCapturePhoto() {
+    const blob = webcam.capture();
+    if (blob) {
+      setPhotoBlob(blob);
+      setPhotoPreview(URL.createObjectURL(blob));
+      webcam.stop();
+      if (isPeakMode) {
+        setStep('review');
+      } else {
+        setStep('id');
+      }
+    } else {
+      toast.error('Failed to capture photo. Please try again.');
+    }
+  }
+
+  function onRetakePhoto() {
+    if (photoPreview) URL.revokeObjectURL(photoPreview);
+    setPhotoBlob(null);
+    setPhotoPreview(null);
+    setStep('photo');
+    webcam.start();
+  }
+
+  async function onIdFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const compressed = await compressImageToWebP(file);
+      setIdBlob(compressed);
+      setIdPreview(URL.createObjectURL(compressed));
+    } catch {
+      toast.error('Failed to process ID image. Please try another file.');
+    }
+  }
+
+
+
+  // ============================================================
+  // SUBMIT — Anonymous Sign-in → Upload → Create Docs → QR
+  // ============================================================
+  async function onSubmit() {
+    if (!photoBlob) {
+      toast.error('Photo is required.');
+      return;
+    }
+    if (!isPeakMode && !idBlob) {
+      toast.error('ID upload is required.');
+      return;
+    }
+
+    setStep('generating');
+    setSubmitError(null);
+
+    try {
+      // 1. Anonymous sign-in
+      const userCredential = await signInAnonymously(auth);
+      const uid = userCredential.user.uid;
+
+      // 2. Upload images to Cloudinary
+      const uploads = [uploadToCloudinary(photoBlob, 'e-gatepass/photos')];
+      if (idBlob) {
+        uploads.push(uploadToCloudinary(idBlob, 'e-gatepass/ids'));
+      }
+      const [photoPublicId, idImagePublicId] = await Promise.all(uploads);
+
+      // 3. Create visitor doc
+      const formData = getValues();
+      const visitorRef = doc(collection(db, 'visitors'));
+      const visitorId = visitorRef.id;
+
+      await setDoc(visitorRef, {
+        fullName: formData.fullName,
+        contactNumber: formData.contactNumber,
+        purpose: formData.purpose,
+        visitDate: formData.visitDate,
+        idImagePublicId: idImagePublicId || null,
+        photoPublicId,
+        consentAcceptedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        createdByUid: uid,
+        imagesPurgedAt: null,
+      });
+
+      // 4. Calculate pass validity based on working hours
+      // TODO: Read from settings/app in production; hardcoding 08:00–17:00 for now
+      const visitDateParsed = parse(formData.visitDate, 'yyyy-MM-dd', new Date());
+      const dayStart = startOfDay(visitDateParsed);
+      const validFrom = setDate(dayStart, { hours: 8, minutes: 0 });
+      const validUntil = setDate(dayStart, { hours: 17, minutes: 0 });
+
+      // 5. Create gate pass doc
+      const gatePassRef = doc(collection(db, 'gatePasses'));
+      const gatePassId = gatePassRef.id;
+
+      await setDoc(gatePassRef, {
+        visitorId,
+        visitorName: formData.fullName,
+        purpose: formData.purpose,
+        photoPublicId,
+        source: 'portal' as const,
+        status: 'issued' as const,
+        validFrom: Timestamp.fromDate(validFrom),
+        validUntil: Timestamp.fromDate(validUntil),
+        issuedAt: serverTimestamp(),
+        scannedAt: null,
+        timeIn: null,
+        timeOut: null,
+        entryDeviceId: null,
+        exitDeviceId: null,
+        decidedByUid: null,
+        rejectionReason: null,
+        gate: null,
+        createdByUid: uid,
+      });
+
+      // 6. Generate QR code
+      // QR payload is the gate pass document ID (scanner looks up the doc)
+      const qrUrl = await toDataURL(gatePassId, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#1a1a2e',
+          light: '#ffffff',
+        },
+      });
+
+      setQrDataUrl(qrUrl);
+      setPassId(gatePassId);
+      setStep('done');
+      toast.success('Gate pass generated successfully!');
+    } catch (err) {
+      console.error('Pass generation error:', err);
+      setSubmitError(
+        err instanceof Error ? err.message : 'An unexpected error occurred.'
+      );
+      setStep('review');
+      toast.error('Failed to generate pass. Please try again.');
+    }
+  }
+
+  function downloadQR() {
+    if (!qrDataUrl || !passId) return;
+    const link = document.createElement('a');
+    link.download = `EARIST-GatePass-${passId.slice(0, 8)}.png`;
+    link.href = qrDataUrl;
+    link.click();
+  }
+
+  async function shareQR() {
+    if (!passId) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'EARIST Gate Pass',
+          text: `Your EARIST Gate Pass ID is: ${passId}. Please present the QR code at the gate.`,
+        });
+      } else {
+        window.location.href = `mailto:?subject=EARIST Gate Pass&body=Your gate pass ID is ${passId}. Please present the QR code at the gate.`;
+      }
+    } catch (err) {
+      console.error('Error sharing:', err);
+    }
+  }
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  return (
+    <main
+      id="main-content"
+      className="flex min-h-dvh flex-col items-center justify-start px-4 py-8"
+      style={{ backgroundColor: 'var(--color-canvas)' }}
+    >
+      <div className="w-full max-w-lg">
+        {/* Header */}
+        <div className="mb-6 text-center">
+          <div
+            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl"
+            style={{ backgroundColor: 'var(--color-brand-light)' }}
+          >
+            <Shield
+              className="h-6 w-6"
+              style={{ color: 'var(--color-brand)' }}
+              aria-hidden="true"
+            />
+          </div>
+          <h1
+            className="text-2xl font-bold"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            Get Gate Pass
+          </h1>
+          <p
+            className="mt-1 text-sm"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            Fill in your details to generate a QR-coded gate pass
+          </p>
+        </div>
+
+        {/* Step Indicator */}
+        {step !== 'done' && step !== 'generating' && (
+          <div className="mb-6 flex items-center justify-center gap-2">
+            {(isPeakMode ? (['form', 'photo', 'review'] as const) : (['form', 'photo', 'id', 'review'] as const)).map((s, i, arr) => (
+              <div key={s} className="flex items-center gap-2">
+                <div
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
+                  style={{
+                    backgroundColor:
+                      step === s
+                        ? 'var(--color-brand)'
+                        : arr.indexOf(step as any) > i
+                          ? 'var(--color-success)'
+                          : 'var(--color-overlay)',
+                    color:
+                      step === s ||
+                      arr.indexOf(step as any) > i
+                        ? '#fff'
+                        : 'var(--color-text-muted)',
+                    borderRadius: 'var(--radius-full)',
+                  }}
+                >
+                  {arr.indexOf(step as any) > i ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    i + 1
+                  )}
+                </div>
+                {i < arr.length - 1 && (
+                  <div
+                    className="h-0.5 w-8"
+                    style={{
+                      backgroundColor:
+                        arr.indexOf(step as any) > i
+                          ? 'var(--color-success)'
+                          : 'var(--color-border)',
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Card container */}
+        <div
+          className="rounded-xl p-6"
+          style={{
+            backgroundColor: 'var(--color-surface)',
+            boxShadow: 'var(--shadow-md)',
+            borderRadius: 'var(--radius-lg)',
+          }}
+        >
+          {/* ============================== STEP 1: FORM ============================== */}
+          {step === 'form' && (
+            <form
+              onSubmit={handleSubmit(onFormNext)}
+              className="space-y-4"
+              noValidate
+            >
+              <div>
+                <label
+                  htmlFor="fullName"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Full Name
+                </label>
+                <input
+                  id="fullName"
+                  type="text"
+                  {...register('fullName')}
+                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
+                  style={{
+                    borderColor: errors.fullName
+                      ? 'var(--color-danger)'
+                      : 'var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--color-overlay)',
+                  }}
+                  placeholder="Juan Dela Cruz"
+                />
+                {errors.fullName && (
+                  <p
+                    className="mt-1 flex items-center gap-1 text-xs"
+                    style={{ color: 'var(--color-danger)' }}
+                    role="alert"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.fullName.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="contactNumber"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Contact Number
+                </label>
+                <input
+                  id="contactNumber"
+                  type="tel"
+                  {...register('contactNumber')}
+                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
+                  style={{
+                    borderColor: errors.contactNumber
+                      ? 'var(--color-danger)'
+                      : 'var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--color-overlay)',
+                  }}
+                  placeholder="09171234567"
+                />
+                {errors.contactNumber && (
+                  <p
+                    className="mt-1 flex items-center gap-1 text-xs"
+                    style={{ color: 'var(--color-danger)' }}
+                    role="alert"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.contactNumber.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="purpose"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Purpose of Visit
+                </label>
+                <textarea
+                  id="purpose"
+                  {...register('purpose')}
+                  rows={3}
+                  className="w-full resize-none rounded-md border px-3 py-2 text-sm outline-none"
+                  style={{
+                    borderColor: errors.purpose
+                      ? 'var(--color-danger)'
+                      : 'var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--color-overlay)',
+                  }}
+                  placeholder="e.g. Meeting with Prof. Santos, Room 201"
+                />
+                {errors.purpose && (
+                  <p
+                    className="mt-1 flex items-center gap-1 text-xs"
+                    style={{ color: 'var(--color-danger)' }}
+                    role="alert"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.purpose.message}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="visitDate"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Visit Date
+                </label>
+                <input
+                  id="visitDate"
+                  type="date"
+                  {...register('visitDate')}
+                  min={today}
+                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
+                  style={{
+                    borderColor: errors.visitDate
+                      ? 'var(--color-danger)'
+                      : 'var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--color-overlay)',
+                  }}
+                />
+                {errors.visitDate && (
+                  <p
+                    className="mt-1 flex items-center gap-1 text-xs"
+                    style={{ color: 'var(--color-danger)' }}
+                    role="alert"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.visitDate.message}
+                  </p>
+                )}
+              </div>
+
+              {/* Data Privacy Act Consent */}
+              <div
+                className="rounded-md p-3"
+                style={{
+                  backgroundColor: 'var(--color-brand-light)',
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              >
+                <label className="flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    {...register('consent')}
+                    className="mt-0.5"
+                  />
+                  <span style={{ color: 'var(--color-text-primary)' }}>
+                    I consent to the collection and processing of my personal
+                    information in accordance with the{' '}
+                    <strong>Data Privacy Act of 2012 (RA 10173)</strong>. My
+                    data will be used solely for campus visitor management and
+                    security purposes.
+                  </span>
+                </label>
+                {errors.consent && (
+                  <p
+                    className="mt-1 flex items-center gap-1 text-xs"
+                    style={{ color: 'var(--color-danger)' }}
+                    role="alert"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.consent.message}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={!isValid}
+                className="flex w-full items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                style={{
+                  backgroundColor: 'var(--color-brand)',
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              >
+                Next: Take Photo
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </form>
+          )}
+
+          {/* ============================== STEP 2: PHOTO ============================== */}
+          {step === 'photo' && (
+            <div className="space-y-4">
+              <h2
+                className="text-center text-lg font-semibold"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                Take Your Photo
+              </h2>
+              <p
+                className="text-center text-xs"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                Look directly at the camera. This photo will be shown to the
+                guard for verification.
+              </p>
+
+              {webcam.error && (
+                <div
+                  className="rounded-md p-3 text-sm"
+                  style={{
+                    backgroundColor: 'var(--color-danger-light)',
+                    color: 'var(--color-danger)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                  role="alert"
+                >
+                  {webcam.error}
+                </div>
+              )}
+
+              <div
+                className="relative mx-auto aspect-[3/4] w-full max-w-xs overflow-hidden rounded-lg"
+                style={{
+                  backgroundColor: '#000',
+                  borderRadius: 'var(--radius-md)',
+                }}
+              >
+                <video
+                  ref={webcam.videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="h-full w-full object-cover"
+                  style={{ transform: 'scaleX(-1)' }}
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    webcam.stop();
+                    setStep('form');
+                  }}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
+                  style={{
+                    borderColor: 'var(--color-border)',
+                    color: 'var(--color-text-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={onCapturePhoto}
+                  disabled={!webcam.isActive}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                  style={{
+                    backgroundColor: 'var(--color-brand)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <Camera className="h-4 w-4" />
+                  Capture
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ============================== STEP 3: VALID ID ============================== */}
+          {step === 'id' && (
+            <div className="space-y-4">
+              <h2
+                className="text-center text-lg font-semibold"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                Upload Valid ID
+              </h2>
+              <p
+                className="text-center text-xs"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                Take a photo or upload an image of your valid government-issued
+                ID.
+              </p>
+
+              {idPreview ? (
+                <div className="space-y-3">
+                  <div
+                    className="relative mx-auto max-w-xs overflow-hidden rounded-lg"
+                    style={{ borderRadius: 'var(--radius-md)' }}
+                  >
+                    <img
+                      src={idPreview}
+                      alt="Valid ID preview"
+                      className="w-full"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (idPreview) URL.revokeObjectURL(idPreview);
+                        setIdBlob(null);
+                        setIdPreview(null);
+                      }}
+                      className="absolute right-2 top-2 rounded-full p-1 text-white"
+                      style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+                      aria-label="Remove ID image"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={onRetakePhoto}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
+                      style={{
+                        borderColor: 'var(--color-border)',
+                        color: 'var(--color-text-primary)',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      Retake Photo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStep('review')}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white"
+                      style={{
+                        backgroundColor: 'var(--color-brand)',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      Review
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div
+                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
+                    style={{
+                      borderColor: 'var(--color-border-strong)',
+                      borderRadius: 'var(--radius-md)',
+                    }}
+                    onClick={() => fileInputRef.current?.click()}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        fileInputRef.current?.click();
+                      }
+                    }}
+                  >
+                    <Upload
+                      className="mb-2 h-8 w-8"
+                      style={{ color: 'var(--color-text-muted)' }}
+                    />
+                    <span
+                      className="text-sm font-medium"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      Tap to upload or take a photo
+                    </span>
+                    <span
+                      className="text-xs"
+                      style={{ color: 'var(--color-text-muted)' }}
+                    >
+                      JPG, PNG, or WebP — max 5MB
+                    </span>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={onIdFileChange}
+                    className="hidden"
+                    aria-label="Upload valid ID"
+                  />
+                  <button
+                    type="button"
+                    onClick={onRetakePhoto}
+                    className="flex w-full items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
+                    style={{
+                      borderColor: 'var(--color-border)',
+                      color: 'var(--color-text-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Retake Selfie
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ============================== STEP 4: REVIEW ============================== */}
+          {step === 'review' && (
+            <div className="space-y-4">
+              <h2
+                className="text-center text-lg font-semibold"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
+                Review Your Pass
+              </h2>
+
+              {submitError && (
+                <div
+                  className="rounded-md p-3 text-sm"
+                  style={{
+                    backgroundColor: 'var(--color-danger-light)',
+                    color: 'var(--color-danger)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                  role="alert"
+                >
+                  {submitError}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                {/* Info summary */}
+                <div
+                  className="rounded-md p-3 text-sm"
+                  style={{
+                    backgroundColor: 'var(--color-overlay)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <div className="grid gap-2">
+                    <div>
+                      <span
+                        className="text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Name
+                      </span>
+                      <p
+                        className="font-semibold"
+                        style={{ color: 'var(--color-text-primary)' }}
+                      >
+                        {getValues('fullName')}
+                      </p>
+                    </div>
+                    <div>
+                      <span
+                        className="text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Contact
+                      </span>
+                      <p style={{ color: 'var(--color-text-primary)' }}>
+                        {getValues('contactNumber')}
+                      </p>
+                    </div>
+                    <div>
+                      <span
+                        className="text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Purpose
+                      </span>
+                      <p style={{ color: 'var(--color-text-primary)' }}>
+                        {getValues('purpose')}
+                      </p>
+                    </div>
+                    <div>
+                      <span
+                        className="text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Visit Date
+                      </span>
+                      <p style={{ color: 'var(--color-text-primary)' }}>
+                        {getValues('visitDate')}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Photo + ID thumbnails */}
+                <div className="flex gap-3">
+                  {photoPreview && (
+                    <div className="flex-1">
+                      <span
+                        className="mb-1 block text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Your Photo
+                      </span>
+                      <img
+                        src={photoPreview}
+                        alt="Your photo"
+                        className="aspect-[3/4] w-full rounded-md object-cover"
+                        style={{ borderRadius: 'var(--radius-sm)' }}
+                      />
+                    </div>
+                  )}
+                  {idPreview && (
+                    <div className="flex-1">
+                      <span
+                        className="mb-1 block text-xs font-medium"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        Valid ID
+                      </span>
+                      <img
+                        src={idPreview}
+                        alt="Valid ID"
+                        className="aspect-[3/4] w-full rounded-md object-cover"
+                        style={{ borderRadius: 'var(--radius-sm)' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isPeakMode) {
+                      setStep('photo');
+                    } else {
+                      setStep('id');
+                    }
+                  }}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
+                  style={{
+                    borderColor: 'var(--color-border)',
+                    color: 'var(--color-text-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={onSubmit}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white"
+                  style={{
+                    backgroundColor: 'var(--color-success)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Generate Pass
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ============================== GENERATING ============================== */}
+          {step === 'generating' && (
+            <div className="flex flex-col items-center justify-center py-12">
+              <div
+                className="mb-4 h-10 w-10 animate-spin rounded-full border-3 border-t-transparent"
+                style={{ borderColor: 'var(--color-brand)' }}
+                role="status"
+              />
+              <p
+                className="text-sm font-medium"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
+                Generating your gate pass…
+              </p>
+              <p
+                className="mt-1 text-xs"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Uploading photos and creating your QR code
+              </p>
+            </div>
+          )}
+
+          {/* ============================== STEP 5: DONE ============================== */}
+          {step === 'done' && qrDataUrl && (
+            <div className="space-y-4 text-center">
+              <div
+                className="mx-auto flex h-12 w-12 items-center justify-center rounded-full"
+                style={{ backgroundColor: 'var(--color-success-light)' }}
+              >
+                <CheckCircle2
+                  className="h-6 w-6"
+                  style={{ color: 'var(--color-success)' }}
+                />
+              </div>
+
+              <div>
+                <h2
+                  className="text-lg font-bold"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Gate Pass Ready!
+                </h2>
+                <p
+                  className="mt-1 text-xs"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  Show this QR code at the entry scanner when you arrive.
+                </p>
+              </div>
+
+              <div className="mx-auto inline-block rounded-lg bg-white p-4">
+                <img
+                  src={qrDataUrl}
+                  alt="Gate Pass QR Code"
+                  className="h-64 w-64"
+                />
+              </div>
+
+              <div
+                className="rounded-md p-3 text-left text-sm"
+                style={{
+                  backgroundColor: 'var(--color-overlay)',
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              >
+                <p>
+                  <strong>Name:</strong> {getValues('fullName')}
+                </p>
+                <p>
+                  <strong>Date:</strong> {getValues('visitDate')}
+                </p>
+                <p>
+                  <strong>Valid:</strong> 08:00 AM – 05:00 PM
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={downloadQR}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors"
+                  style={{
+                    borderColor: 'var(--color-border)',
+                    color: 'var(--color-text-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={shareQR}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+                  style={{
+                    backgroundColor: 'var(--color-brand)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  Email / Share
+                </button>
+              </div>
+
+              <p
+                className="text-xs"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                You can also take a screenshot of this page.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
