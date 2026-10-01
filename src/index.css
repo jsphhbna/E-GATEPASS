@@ -5,10 +5,10 @@
    EARIST brand: deep blue (institutional), with teal accent.
    ============================================================ */
 @theme {
-  /* Brand (10% accent) — EARIST institutional blue */
-  --color-brand: hsl(215, 72%, 42%);
-  --color-brand-light: hsl(215, 72%, 95%);
-  --color-brand-dark: hsl(215, 72%, 32%);
+  /* EARIST Brand — Red as Primary */
+  --color-brand: #E60000;
+  --color-brand-light: #FFF0F0;
+  --color-brand-dark: #B30000;
   
   /* EARIST Identity Colors */
   --color-earist-red: #E60000;
