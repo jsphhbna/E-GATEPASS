@@ -1,7 +1,6 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
 import { adminAuth } from './firebase-admin';
-import { requireAuth, handleAuthError } from './utils/auth';
 
 // Configure Cloudinary using server-only env vars
 cloudinary.config({
@@ -11,39 +10,41 @@ cloudinary.config({
   secure: true,
 });
 
+// Server-controlled allowlist of Cloudinary folders.
+// The generic root 'e-gatepass' folder is NOT included because all uploads
+// go to either 'e-gatepass/photos' or 'e-gatepass/ids' in the current codebase.
+const ALLOWED_FOLDERS = ['e-gatepass/ids', 'e-gatepass/photos'] as const;
+
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method not allowed' };
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
   try {
-    // We only require basic auth (which includes anonymous visitors via requireAuth? No, requireAuth checks user document in DB!)
-    // Wait, if it's an anonymous user, they do NOT have a user document in Firestore users collection.
-    // Let's manually verify the token but NOT require a user doc, because anonymous users just need to upload.
+    // Verify Firebase auth token (allows anonymous visitors and device accounts)
     const authHeader = event.headers.authorization || event.headers.Authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return { statusCode: 401, body: JSON.stringify({ error: 'Missing or invalid token' }) };
     }
 
     const token = authHeader.split('Bearer ')[1]!;
-    await adminAuth.verifyIdToken(token); // Throws if invalid or expired (allows anonymous)
+    await adminAuth.verifyIdToken(token);
 
-    // 2. Parse request to get folder name (optional)
+    // Parse and validate the requested folder
     const body = event.body ? JSON.parse(event.body) : {};
-    
-    // SERVER-CONTROLLED ALLOWLIST
-    const ALLOWED_FOLDERS = ['e-gatepass/ids', 'e-gatepass/photos', 'e-gatepass'];
-    const requestedFolder = body.folder || 'e-gatepass';
-    if (!ALLOWED_FOLDERS.includes(requestedFolder)) {
+    const requestedFolder: string = body.folder || '';
+
+    if (!ALLOWED_FOLDERS.includes(requestedFolder as typeof ALLOWED_FOLDERS[number])) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid folder requested' }) };
     }
-    const folder = requestedFolder;
 
-    // 3. Generate Cloudinary signature
+    // Generate Cloudinary signature with a fixed, server-controlled parameter set.
+    // Only timestamp and folder are signed — the client cannot inject arbitrary
+    // Cloudinary parameters (transformations, tags, etc.) into the signature.
     const timestamp = Math.round(new Date().getTime() / 1000);
     const paramsToSign = {
       timestamp,
-      folder,
+      folder: requestedFolder,
     };
 
     const signature = cloudinary.utils.api_sign_request(

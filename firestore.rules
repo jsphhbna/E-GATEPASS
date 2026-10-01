@@ -38,6 +38,13 @@ service cloud.firestore {
              get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.status == 'active';
     }
 
+    // Returns true if the caller is NOT a known user/device (i.e. anonymous visitor)
+    function isAnonymousVisitor() {
+      return isLoggedIn() &&
+             !exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             !exists(/databases/$(database)/documents/devices/$(request.auth.uid));
+    }
+
     // ============================================================
     // COLLECTION RULES
     // ============================================================
@@ -62,18 +69,20 @@ service cloud.firestore {
     match /visitors/{visitorId} {
       // Visitors (anonymous) can create only. Guards and Admins can read.
       allow create: if isLoggedIn() &&
+                       request.resource.data.keys().hasAll(['firstName', 'middleName', 'lastName', 'fullName', 'contactNumber', 'purpose', 'visitDate', 'idImagePublicId', 'photoPublicId', 'consentAcceptedAt', 'createdAt', 'createdByUid', 'imagesPurgedAt']) &&
                        request.resource.data.keys().hasOnly(['firstName', 'middleName', 'lastName', 'fullName', 'contactNumber', 'purpose', 'visitDate', 'idImagePublicId', 'photoPublicId', 'consentAcceptedAt', 'createdAt', 'createdByUid', 'imagesPurgedAt']) &&
+                       // Type validation
                        request.resource.data.firstName is string && request.resource.data.firstName.size() > 0 &&
                        request.resource.data.middleName is string &&
                        request.resource.data.lastName is string && request.resource.data.lastName.size() > 0 &&
                        request.resource.data.fullName is string && request.resource.data.fullName.size() > 0 &&
-                       request.resource.data.contactNumber is string &&
-                       request.resource.data.purpose is string &&
-                       request.resource.data.visitDate is string &&
+                       request.resource.data.contactNumber is string && request.resource.data.contactNumber.size() > 0 &&
+                       request.resource.data.purpose is string && request.resource.data.purpose.size() > 0 &&
+                       request.resource.data.visitDate is string && request.resource.data.visitDate.size() > 0 &&
                        (request.resource.data.idImagePublicId is string || request.resource.data.idImagePublicId == null) &&
-                       request.resource.data.photoPublicId is string &&
-                       request.resource.data.consentAcceptedAt != null &&
-                       request.resource.data.createdAt != null &&
+                       request.resource.data.photoPublicId is string && request.resource.data.photoPublicId.size() > 0 &&
+                       request.resource.data.consentAcceptedAt is timestamp &&
+                       request.resource.data.createdAt is timestamp &&
                        request.resource.data.imagesPurgedAt == null &&
                        request.resource.data.createdByUid == request.auth.uid;
                        
@@ -83,53 +92,124 @@ service cloud.firestore {
     }
 
     match /gatePasses/{passId} {
-      // Visitors can create and read their own.
-      // Entry devices update to 'pending'.
-      // Guards can read, update to 'inside'/'rejected'.
-      // Exit devices update to 'exited'.
-      // Admins can read all.
-      
-      allow create: if isLoggedIn() && 
-                       request.resource.data.keys().hasOnly(['visitorId', 'visitorName', 'purpose', 'photoPublicId', 'idImagePublicId', 'source', 'status', 'validFrom', 'validUntil', 'issuedAt', 'scannedAt', 'timeIn', 'timeOut', 'entryDeviceId', 'exitDeviceId', 'decidedByUid', 'rejectionReason', 'gate', 'createdByUid']) &&
-                       request.resource.data.status == 'issued' &&
-                       request.resource.data.source in ['portal', 'kiosk'] &&
-                       request.resource.data.createdByUid == request.auth.uid &&
-                       get(/databases/$(database)/documents/visitors/$(request.resource.data.visitorId)).data.createdByUid == request.auth.uid &&
-                       request.resource.data.scannedAt == null &&
-                       request.resource.data.timeIn == null &&
-                       request.resource.data.timeOut == null &&
-                       request.resource.data.entryDeviceId == null &&
-                       request.resource.data.exitDeviceId == null &&
-                       request.resource.data.decidedByUid == null &&
-                       request.resource.data.rejectionReason == null &&
-                       request.resource.data.gate == null;
+      // ── Creation ──
+      // Portal passes: only anonymous visitors (not known users/devices)
+      // Kiosk passes: only active kiosk devices
+      allow create: if 
+        // ── Portal source: anonymous visitor ──
+        (
+          isAnonymousVisitor() &&
+          request.resource.data.source == 'portal' &&
+          request.resource.data.keys().hasAll(['visitorId', 'visitorName', 'purpose', 'photoPublicId', 'idImagePublicId', 'source', 'status', 'validFrom', 'validUntil', 'issuedAt', 'scannedAt', 'timeIn', 'timeOut', 'entryDeviceId', 'exitDeviceId', 'decidedByUid', 'rejectionReason', 'gate', 'createdByUid']) &&
+          request.resource.data.keys().hasOnly(['visitorId', 'visitorName', 'purpose', 'photoPublicId', 'idImagePublicId', 'source', 'status', 'validFrom', 'validUntil', 'issuedAt', 'scannedAt', 'timeIn', 'timeOut', 'entryDeviceId', 'exitDeviceId', 'decidedByUid', 'rejectionReason', 'gate', 'createdByUid']) &&
+          // Type & content validation
+          request.resource.data.visitorId is string && request.resource.data.visitorId.size() > 0 &&
+          request.resource.data.visitorName is string && request.resource.data.visitorName.size() > 0 &&
+          request.resource.data.purpose is string && request.resource.data.purpose.size() > 0 &&
+          request.resource.data.photoPublicId is string && request.resource.data.photoPublicId.size() > 0 &&
+          (request.resource.data.idImagePublicId is string || request.resource.data.idImagePublicId == null) &&
+          request.resource.data.status == 'issued' &&
+          request.resource.data.validFrom is timestamp &&
+          request.resource.data.validUntil is timestamp &&
+          request.resource.data.validUntil > request.resource.data.validFrom &&
+          request.resource.data.issuedAt is timestamp &&
+          // Null-initial fields
+          request.resource.data.scannedAt == null &&
+          request.resource.data.timeIn == null &&
+          request.resource.data.timeOut == null &&
+          request.resource.data.entryDeviceId == null &&
+          request.resource.data.exitDeviceId == null &&
+          request.resource.data.decidedByUid == null &&
+          request.resource.data.rejectionReason == null &&
+          request.resource.data.gate == null &&
+          // Ownership
+          request.resource.data.createdByUid == request.auth.uid &&
+          get(/databases/$(database)/documents/visitors/$(request.resource.data.visitorId)).data.createdByUid == request.auth.uid
+        ) ||
+        // ── Kiosk source: active kiosk device ──
+        (
+          isDevice('kiosk') &&
+          request.resource.data.source == 'kiosk' &&
+          request.resource.data.keys().hasAll(['visitorId', 'visitorName', 'purpose', 'photoPublicId', 'idImagePublicId', 'source', 'status', 'validFrom', 'validUntil', 'issuedAt', 'scannedAt', 'timeIn', 'timeOut', 'entryDeviceId', 'exitDeviceId', 'decidedByUid', 'rejectionReason', 'gate', 'createdByUid']) &&
+          request.resource.data.keys().hasOnly(['visitorId', 'visitorName', 'purpose', 'photoPublicId', 'idImagePublicId', 'source', 'status', 'validFrom', 'validUntil', 'issuedAt', 'scannedAt', 'timeIn', 'timeOut', 'entryDeviceId', 'exitDeviceId', 'decidedByUid', 'rejectionReason', 'gate', 'createdByUid']) &&
+          // Type & content validation
+          request.resource.data.visitorId is string && request.resource.data.visitorId.size() > 0 &&
+          request.resource.data.visitorName is string && request.resource.data.visitorName.size() > 0 &&
+          request.resource.data.purpose is string && request.resource.data.purpose.size() > 0 &&
+          request.resource.data.photoPublicId is string && request.resource.data.photoPublicId.size() > 0 &&
+          (request.resource.data.idImagePublicId is string || request.resource.data.idImagePublicId == null) &&
+          request.resource.data.status == 'issued' &&
+          request.resource.data.validFrom is timestamp &&
+          request.resource.data.validUntil is timestamp &&
+          request.resource.data.validUntil > request.resource.data.validFrom &&
+          request.resource.data.issuedAt is timestamp &&
+          // Null-initial fields
+          request.resource.data.scannedAt == null &&
+          request.resource.data.timeIn == null &&
+          request.resource.data.timeOut == null &&
+          request.resource.data.entryDeviceId == null &&
+          request.resource.data.exitDeviceId == null &&
+          request.resource.data.decidedByUid == null &&
+          request.resource.data.rejectionReason == null &&
+          request.resource.data.gate == null &&
+          // Ownership
+          request.resource.data.createdByUid == request.auth.uid &&
+          get(/databases/$(database)/documents/visitors/$(request.resource.data.visitorId)).data.createdByUid == request.auth.uid
+        );
                        
       allow get: if isAdmin() || isGuard() || isActiveDevice() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow list: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       
+      // ── Updates ──
       allow update: if 
         isAdmin() || 
+        // Entry device: issued → pending (with scanner UID ownership + type checks)
         (
           isDevice('entry') && 
           resource.data.status == 'issued' && 
           (
-            (request.resource.data.status == 'pending' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'scannedAt', 'entryDeviceId', 'gate'])) ||
-            (request.resource.data.status == 'expired' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+            (
+              request.resource.data.status == 'pending' && 
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'scannedAt', 'entryDeviceId', 'gate']) &&
+              request.resource.data.scannedAt is timestamp &&
+              request.resource.data.entryDeviceId == request.auth.uid &&
+              request.resource.data.gate is string && request.resource.data.gate.size() > 0
+            ) ||
+            // Entry device: issued → expired (only if pass is actually expired)
+            (
+              request.resource.data.status == 'expired' && 
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+              resource.data.validUntil < request.time
+            )
           )
         ) ||
+        // Exit device: inside → exited (with scanner UID ownership)
         (
           isDevice('exit') && 
           resource.data.status == 'inside' && 
           request.resource.data.status == 'exited' &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeOut', 'exitDeviceId'])
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeOut', 'exitDeviceId']) &&
+          request.resource.data.timeOut is timestamp &&
+          request.resource.data.exitDeviceId == request.auth.uid
         ) ||
+        // Guard: pending → inside (approve)
         (
           isGuard() && 
           resource.data.status == 'pending' &&
           request.resource.data.decidedByUid == request.auth.uid &&
           (
-            (request.resource.data.status == 'inside' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeIn', 'decidedByUid'])) ||
-            (request.resource.data.status == 'rejected' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'rejectionReason', 'decidedByUid']))
+            (
+              request.resource.data.status == 'inside' && 
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeIn', 'decidedByUid']) &&
+              request.resource.data.timeIn is timestamp
+            ) ||
+            // Guard: pending → rejected (with non-empty reason)
+            (
+              request.resource.data.status == 'rejected' && 
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'rejectionReason', 'decidedByUid']) &&
+              request.resource.data.rejectionReason is string &&
+              request.resource.data.rejectionReason.size() > 0
+            )
           )
         );
         

@@ -1,6 +1,5 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
-import { adminAuth } from './firebase-admin';
 import { requireAdmin, requireGuardOrAdmin, handleAuthError } from './utils/auth';
 
 cloudinary.config({

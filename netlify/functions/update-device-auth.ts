@@ -9,7 +9,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const authContext = await requireAdmin(event.headers.authorization);
+    await requireAdmin(event.headers.authorization);
     const db = getFirestore();
 
     const body = JSON.parse(event.body || '{}');
