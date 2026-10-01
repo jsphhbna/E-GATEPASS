@@ -32,7 +32,7 @@ describe('Firestore Security Rules', () => {
         visitDate: '2026-10-01',
         createdAt: new Date(),
         status: 'pending',
-        consent: true
+        consentAcceptedAt: new Date()
       })
     );
   });
@@ -47,7 +47,7 @@ describe('Firestore Security Rules', () => {
         visitDate: '2026-10-01',
         createdAt: new Date(),
         status: 'pending',
-        consent: true
+        consentAcceptedAt: new Date()
       })
     );
   });
@@ -62,7 +62,7 @@ describe('Firestore Security Rules', () => {
         visitDate: '2026-10-01',
         createdAt: new Date(),
         status: 'pending',
-        consent: true
+        consentAcceptedAt: new Date()
       })
     );
   });

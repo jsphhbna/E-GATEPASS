@@ -63,12 +63,12 @@ service cloud.firestore {
       // Visitors (anonymous) can create only (and read their own data via client state if needed, though mostly write-only).
       // Guards and Admins can read. Admins can update for data retention purging.
       allow create: if isLoggedIn() &&
-                       request.resource.data.keys().hasAll(['firstName', 'lastName', 'consent']) &&
+                       request.resource.data.keys().hasAll(['firstName', 'lastName', 'consentAcceptedAt']) &&
                        request.resource.data.firstName is string &&
                        request.resource.data.firstName.size() > 0 &&
                        request.resource.data.lastName is string &&
                        request.resource.data.lastName.size() > 0 &&
-                       request.resource.data.consent == true;
+                       request.resource.data.consentAcceptedAt != null;
       allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow update: if isAdmin();
       allow delete: if false; // Retention purge is an update to imagesPurgedAt, not delete

@@ -76,6 +76,7 @@ describe('E-GatePass Firestore Rules', () => {
       await assertSucceeds(anonDb.collection('visitors').add({
         firstName: 'Test',
         lastName: 'Visitor',
+        consentAcceptedAt: testEnv.firestore.Timestamp.now(),
       }));
     });
 
