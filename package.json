@@ -9,8 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "netlify:dev": "netlify dev",
-    "emulators": "firebase emulators:start --only auth,firestore",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "emulators": "npx firebase-tools emulators:start --only auth,firestore",
+    "test": "npx firebase-tools emulators:exec \"vitest run\""
   },
   "repository": {
     "type": "git",

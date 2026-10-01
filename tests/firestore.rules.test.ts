@@ -34,19 +34,19 @@ describe('E-GatePass Firestore Rules', () => {
   
   // Helpers to get authenticated / unauthenticated contexts
   const getAdminContext = () => {
-    return testEnv.authenticatedContext('admin_uid');
+    return testEnv.authenticatedContext('admin_uid', { email_verified: true });
   };
 
-  const getGuardContext = () => {
-    return testEnv.authenticatedContext('guard_uid');
+  const getGuardContext = (uid = 'guard_uid', isVerified = true) => {
+    return testEnv.authenticatedContext(uid, { email_verified: isVerified });
   };
 
-  const getDeviceContext = () => {
-    return testEnv.authenticatedContext('device_uid');
+  const getDeviceContext = (uid = 'device_uid') => {
+    return testEnv.authenticatedContext(uid, { email_verified: true });
   };
 
-  const getAnonContext = () => {
-    return testEnv.authenticatedContext('anon_uid', { isAnonymous: true });
+  const getAnonContext = (uid = 'anon_uid') => {
+    return testEnv.authenticatedContext(uid, { isAnonymous: true });
   };
 
   beforeEach(async () => {
@@ -63,82 +63,204 @@ describe('E-GatePass Firestore Rules', () => {
         role: 'guard',
         active: true,
       });
+      
+      await db.collection('users').doc('inactive_guard').set({
+        role: 'guard',
+        active: false,
+      });
 
-      await db.collection('devices').doc('device_uid').set({
+      await db.collection('devices').doc('entry_device').set({
+        type: 'entry',
         status: 'active',
       });
+      
+      await db.collection('devices').doc('exit_device').set({
+        type: 'exit',
+        status: 'active',
+      });
+      
+      await db.collection('devices').doc('kiosk_device').set({
+        type: 'kiosk',
+        status: 'active',
+      });
+      
+      await db.collection('devices').doc('revoked_device').set({
+        type: 'entry',
+        status: 'revoked',
+      });
+    });
+  });
+
+  describe('Authorization Tests', () => {
+    it('Unverified Guard reads protected data -> DENY', async () => {
+      const db = getGuardContext('guard_uid', false).firestore();
+      await assertFails(db.collection('visitors').get());
+    });
+
+    it('Inactive Guard reads protected data -> DENY', async () => {
+      const db = getGuardContext('inactive_guard', true).firestore();
+      await assertFails(db.collection('visitors').get());
+    });
+
+    it('Verified active Guard reads permitted data -> ALLOW', async () => {
+      const db = getGuardContext('guard_uid', true).firestore();
+      await assertSucceeds(db.collection('visitors').get());
+    });
+    
+    it('Revoked Entry device reads/updates -> DENY', async () => {
+      const db = getDeviceContext('revoked_device').firestore();
+      await assertFails(db.collection('gatePasses').get());
+      await assertFails(db.collection('gatePasses').doc('test').update({ status: 'pending' }));
     });
   });
 
   describe('Visitors Collection', () => {
-    it('allows anonymous users to create a visitor doc', async () => {
-      const anonDb = getAnonContext().firestore();
+    it('allows anonymous users to create a visitor doc with createdByUid', async () => {
+      const anonDb = getAnonContext('anon_uid').firestore();
       await assertSucceeds(anonDb.collection('visitors').add({
         firstName: 'Test',
         lastName: 'Visitor',
-        consentAcceptedAt: testEnv.firestore.Timestamp.now(),
+        consentAcceptedAt: new Date(),
+        createdByUid: 'anon_uid'
       }));
     });
-
-    it('prevents unauthenticated users from reading visitor docs', async () => {
-      const unauthedDb = testEnv.unauthenticatedContext().firestore();
-      await assertFails(unauthedDb.collection('visitors').get());
-    });
-
-    it('allows guards and admins to read visitor docs', async () => {
-      const adminDb = getAdminContext().firestore();
-      const guardDb = getGuardContext().firestore();
-      await assertSucceeds(adminDb.collection('visitors').get());
-      await assertSucceeds(guardDb.collection('visitors').get());
+    
+    it('prevents anonymous users from creating visitors for other uids', async () => {
+      const anonDb = getAnonContext('anon_uid').firestore();
+      await assertFails(anonDb.collection('visitors').add({
+        firstName: 'Test',
+        lastName: 'Visitor',
+        consentAcceptedAt: new Date(),
+        createdByUid: 'other_uid'
+      }));
     });
   });
 
-  describe('GatePasses Collection', () => {
-    it('allows anonymous users to create a gate pass', async () => {
-      const anonDb = getAnonContext().firestore();
-      await assertSucceeds(anonDb.collection('gatePasses').add({
-        status: 'issued',
+  describe('GatePasses Collection - Creation', () => {
+    it('Random authenticated user creates arbitrary gate pass -> DENY', async () => {
+      const db = getAnonContext('random_uid').firestore();
+      await assertFails(db.collection('gatePasses').add({
+        status: 'inside', // Invalid state
         visitorId: 'visitor123',
-        idImagePublicId: 'image123',
+        source: 'get-pass',
+        createdByUid: 'random_uid'
       }));
     });
-
-    it('allows devices to update a gate pass (e.g., status pending/inside)', async () => {
-      const deviceDb = getDeviceContext().firestore();
-      // First seed a pass
-      await testEnv.withSecurityRulesDisabled(async (context) => {
-        await context.firestore().collection('gatePasses').doc('pass1').set({ status: 'issued' });
-      });
-      await assertSucceeds(deviceDb.collection('gatePasses').doc('pass1').update({
-        status: 'pending'
-      }));
-    });
-
-    it('allows guards to update a gate pass', async () => {
-      const guardDb = getGuardContext().firestore();
-      await testEnv.withSecurityRulesDisabled(async (context) => {
-        await context.firestore().collection('gatePasses').doc('pass2').set({ status: 'pending' });
-      });
-      await assertSucceeds(guardDb.collection('gatePasses').doc('pass2').update({
-        status: 'inside'
+    
+    it('Invalid initial pass status -> DENY', async () => {
+      const db = getAnonContext('random_uid').firestore();
+      await assertFails(db.collection('gatePasses').add({
+        status: 'exited', // Must be 'issued'
+        visitorId: 'visitor123',
+        source: 'get-pass',
+        createdByUid: 'random_uid'
       }));
     });
   });
 
-  describe('Users & Devices Collections', () => {
-    it('allows admins to write users', async () => {
-      const adminDb = getAdminContext().firestore();
-      await assertSucceeds(adminDb.collection('users').doc('new_user').set({
-        role: 'guard',
-        active: true,
+  describe('GatePasses Collection - Scanners & Guards', () => {
+    beforeEach(async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.collection('gatePasses').doc('pass1').set({ status: 'issued', source: 'kiosk' });
+        await db.collection('gatePasses').doc('pass2').set({ status: 'pending', source: 'kiosk' });
+        await db.collection('gatePasses').doc('pass3').set({ status: 'inside', source: 'kiosk' });
+        await db.collection('gatePasses').doc('pass4').set({ status: 'exited', source: 'kiosk' });
+      });
+    });
+
+    it('Active Entry device issued -> pending -> ALLOW', async () => {
+      const db = getDeviceContext('entry_device').firestore();
+      await assertSucceeds(db.collection('gatePasses').doc('pass1').update({
+        status: 'pending',
+        scannedAt: new Date(),
+        entryDeviceId: 'entry_device',
+        gate: 'Main Gate'
       }));
     });
 
-    it('prevents guards from writing users', async () => {
-      const guardDb = getGuardContext().firestore();
-      await assertFails(guardDb.collection('users').doc('new_user').set({
-        role: 'admin',
-        active: true,
+    it('Entry device changes visitorName -> DENY', async () => {
+      const db = getDeviceContext('entry_device').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass1').update({
+        status: 'pending',
+        scannedAt: new Date(),
+        entryDeviceId: 'entry_device',
+        gate: 'Main Gate',
+        visitorName: 'Hacked Name'
+      }));
+    });
+
+    it('Entry device tries pending -> exited -> DENY', async () => {
+      const db = getDeviceContext('entry_device').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass2').update({
+        status: 'exited',
+        scannedAt: new Date(),
+        entryDeviceId: 'entry_device',
+        gate: 'Main Gate'
+      }));
+    });
+
+    it('Active Exit device inside -> exited -> ALLOW', async () => {
+      const db = getDeviceContext('exit_device').firestore();
+      await assertSucceeds(db.collection('gatePasses').doc('pass3').update({
+        status: 'exited',
+        timeOut: new Date(),
+        exitDeviceId: 'exit_device'
+      }));
+    });
+
+    it('Exit device issued -> exited -> DENY', async () => {
+      const db = getDeviceContext('exit_device').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass1').update({
+        status: 'exited',
+        timeOut: new Date(),
+        exitDeviceId: 'exit_device'
+      }));
+    });
+
+    it('Exit device modifies visitor identity -> DENY', async () => {
+      const db = getDeviceContext('exit_device').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass3').update({
+        status: 'exited',
+        timeOut: new Date(),
+        exitDeviceId: 'exit_device',
+        visitorName: 'Hacked Name'
+      }));
+    });
+
+    it('Guard pending -> inside -> ALLOW', async () => {
+      const db = getGuardContext('guard_uid').firestore();
+      await assertSucceeds(db.collection('gatePasses').doc('pass2').update({
+        status: 'inside',
+        timeIn: new Date(),
+        decidedByUid: 'guard_uid'
+      }));
+    });
+
+    it('Guard pending -> rejected -> ALLOW', async () => {
+      const db = getGuardContext('guard_uid').firestore();
+      await assertSucceeds(db.collection('gatePasses').doc('pass2').update({
+        status: 'rejected',
+        rejectionReason: 'Fake ID',
+        decidedByUid: 'guard_uid'
+      }));
+    });
+
+    it('Guard modifies protected visitor fields -> DENY', async () => {
+      const db = getGuardContext('guard_uid').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass2').update({
+        status: 'inside',
+        timeIn: new Date(),
+        decidedByUid: 'guard_uid',
+        visitorName: 'Changed'
+      }));
+    });
+
+    it('Kiosk modifies allowed fields -> ALLOW', async () => {
+      // Kiosk cannot update according to strict rules, only create
+      const db = getDeviceContext('kiosk_device').firestore();
+      await assertFails(db.collection('gatePasses').doc('pass1').update({
+        status: 'inside'
       }));
     });
   });

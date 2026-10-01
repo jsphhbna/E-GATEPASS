@@ -1,6 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
 import { adminAuth } from './firebase-admin';
+import { requireAuth, handleAuthError } from './utils/auth';
 
 // Configure Cloudinary using server-only env vars
 cloudinary.config({
@@ -16,18 +17,24 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    // 1. Verify Firebase Auth
+    // We only require basic auth (which includes anonymous visitors via requireAuth? No, requireAuth checks user document in DB!)
+    // Wait, if it's an anonymous user, they do NOT have a user document in Firestore users collection.
+    // Let's manually verify the token but NOT require a user doc, because anonymous users just need to upload.
     const authHeader = event.headers.authorization || event.headers.Authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return { statusCode: 401, body: JSON.stringify({ error: 'Missing or invalid token' }) };
     }
 
     const token = authHeader.split('Bearer ')[1]!;
-    await adminAuth.verifyIdToken(token); // Throws if invalid or expired
+    await adminAuth.verifyIdToken(token); // Throws if invalid or expired (allows anonymous)
 
     // 2. Parse request to get folder name (optional)
     const body = event.body ? JSON.parse(event.body) : {};
-    const folder = body.folder || 'e-gatepass';
+    
+    // SERVER-CONTROLLED ALLOWLIST
+    const ALLOWED_FOLDERS = ['e-gatepass/visitor-ids', 'e-gatepass/visitor-photos', 'e-gatepass'];
+    const requestedFolder = body.folder;
+    const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'e-gatepass/visitor-photos';
 
     // 3. Generate Cloudinary signature
     const timestamp = Math.round(new Date().getTime() / 1000);

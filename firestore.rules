@@ -60,15 +60,16 @@ service cloud.firestore {
     }
 
     match /visitors/{visitorId} {
-      // Visitors (anonymous) can create only (and read their own data via client state if needed, though mostly write-only).
-      // Guards and Admins can read. Admins can update for data retention purging.
+      // Visitors (anonymous) can create only. Guards and Admins can read.
       allow create: if isLoggedIn() &&
-                       request.resource.data.keys().hasAll(['firstName', 'lastName', 'consentAcceptedAt']) &&
+                       request.resource.data.keys().hasAll(['firstName', 'lastName', 'consentAcceptedAt', 'createdByUid']) &&
                        request.resource.data.firstName is string &&
                        request.resource.data.firstName.size() > 0 &&
                        request.resource.data.lastName is string &&
                        request.resource.data.lastName.size() > 0 &&
-                       request.resource.data.consentAcceptedAt != null;
+                       request.resource.data.consentAcceptedAt != null &&
+                       request.resource.data.createdByUid == request.auth.uid;
+                       
       allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow update: if isAdmin();
       allow delete: if false; // Retention purge is an update to imagesPurgedAt, not delete
@@ -81,16 +82,37 @@ service cloud.firestore {
       // Exit devices update to 'exited'.
       // Admins can read all.
       
-      allow create: if isLoggedIn() && request.resource.data.visitorId != null;
+      allow create: if isLoggedIn() && 
+                       request.resource.data.keys().hasAll(['visitorId', 'status', 'createdByUid', 'source']) &&
+                       request.resource.data.status == 'issued' &&
+                       request.resource.data.createdByUid == request.auth.uid;
+                       
       allow get: if isAdmin() || isGuard() || isActiveDevice() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow list: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       
       allow update: if 
         isAdmin() || 
-        (isDevice('entry') && request.resource.data.status == 'pending') ||
-        (isDevice('exit') && request.resource.data.status == 'exited') ||
-        (isDevice('kiosk')) || // kiosk might directly approve depending on peak mode, but typically 'issued'
-        (isGuard() && request.resource.data.status in ['inside', 'rejected']);
+        (
+          isDevice('entry') && 
+          resource.data.status == 'issued' && 
+          request.resource.data.status == 'pending' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'scannedAt', 'entryDeviceId', 'gate'])
+        ) ||
+        (
+          isDevice('exit') && 
+          resource.data.status == 'inside' && 
+          request.resource.data.status == 'exited' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeOut', 'exitDeviceId'])
+        ) ||
+        (
+          isGuard() && 
+          resource.data.status == 'pending' &&
+          request.resource.data.decidedByUid == request.auth.uid &&
+          (
+            (request.resource.data.status == 'inside' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeIn', 'decidedByUid'])) ||
+            (request.resource.data.status == 'rejected' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'rejectionReason', 'decidedByUid']))
+          )
+        );
         
       allow delete: if false;
     }

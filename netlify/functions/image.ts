@@ -1,7 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
 import { adminAuth } from './firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { requireAdmin, requireGuardOrAdmin, handleAuthError } from './utils/auth';
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -18,26 +18,7 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    // 1. Verify Auth
-    const authHeader = event.headers.authorization || event.headers.Authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return { statusCode: 401, body: JSON.stringify({ error: 'Missing or invalid token' }) };
-    }
-
-    const token = authHeader.split('Bearer ')[1]!;
-    const decodedToken = await adminAuth.verifyIdToken(token);
-
-    // 2. Resolve Role from Firestore
-    const db = getFirestore();
-    const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    
-    if (!userDoc.exists) {
-      return { statusCode: 403, body: JSON.stringify({ error: 'Staff access required' }) };
-    }
-    
-    const role = userDoc.data()?.role;
-    
-    // 3. Get Public ID
+    // 1. Get Public ID first to fail fast if missing
     const publicId = event.queryStringParameters?.publicId;
     if (!publicId) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Missing publicId' }) };
@@ -47,9 +28,7 @@ export const handler: Handler = async (event) => {
     // DELETE: Admin only
     // ============================================================================
     if (httpMethod === 'DELETE') {
-      if (role !== 'admin') {
-        return { statusCode: 403, body: JSON.stringify({ error: 'Admin access required' }) };
-      }
+      await requireAdmin(event.headers.authorization || event.headers.Authorization);
 
       await cloudinary.uploader.destroy(publicId);
       return {
@@ -62,9 +41,7 @@ export const handler: Handler = async (event) => {
     // ============================================================================
     // GET: Staff only (Admin/Guard)
     // ============================================================================
-    if (role !== 'admin' && role !== 'guard') {
-      return { statusCode: 403, body: JSON.stringify({ error: 'Staff access required' }) };
-    }
+    await requireGuardOrAdmin(event.headers.authorization || event.headers.Authorization);
 
     const imageUrl = cloudinary.url(publicId, {
       secure: true,
@@ -91,10 +68,6 @@ export const handler: Handler = async (event) => {
 
   } catch (error) {
     console.error('Image Proxy Error:', error);
-    return {
-      statusCode: 403,
-      headers: { 'Content-Type': 'application/json' } as Record<string, string>,
-      body: JSON.stringify({ error: 'Authentication failed or internal error' }),
-    };
+    return handleAuthError(error);
   }
 };

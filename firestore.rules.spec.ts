@@ -1,5 +1,6 @@
 import { assertFails, assertSucceeds, initializeTestEnvironment, RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import * as fs from 'fs';
+import { beforeAll, beforeEach, afterAll, describe, it } from 'vitest';
 
 let testEnv: RulesTestEnvironment;
 
