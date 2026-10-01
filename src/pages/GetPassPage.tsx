@@ -200,6 +200,7 @@ export function GetPassPage() {
         visitorName: formData.fullName,
         purpose: formData.purpose,
         photoPublicId,
+        idImagePublicId: idImagePublicId || null,
         source: 'portal' as const,
         status: 'issued' as const,
         validFrom: Timestamp.fromDate(validFrom),

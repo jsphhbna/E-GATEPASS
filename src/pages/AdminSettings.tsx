@@ -95,58 +95,37 @@ export function AdminSettings() {
 
     setPurging(true);
     try {
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - settings.retentionDays);
-
-      const q = query(
-        collection(db, 'visitors'),
-        where('imagesPurgedAt', '==', null)
-        // Note: filtering by date client-side to avoid complex composite index if not strictly needed
-      );
-
-      const snap = await getDocs(q);
-      let purgedCount = 0;
-      let failedCount = 0;
-
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
-      for (const visitorDoc of snap.docs) {
-        const visitor = visitorDoc.data();
+      let totalPurged = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const res = await fetch('/api/purge-images', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Purge failed: ${res.status} - ${text}`);
+        }
+
+        const data = await res.json();
         
-        // Check if older than cutoff
-        const createdAt = visitor.createdAt?.toDate() || new Date(visitor.visitDate);
-        if (createdAt > cutoffDate) continue;
+        if (data.successCount > 0) {
+          totalPurged += data.successCount;
+        }
 
-        // Delete from Cloudinary
-        try {
-          const deleteImage = async (publicId: string) => {
-             const res = await fetch(`/api/image?publicId=${encodeURIComponent(publicId)}`, {
-               method: 'DELETE',
-               headers: { Authorization: `Bearer ${token}` }
-             });
-             if (!res.ok) throw new Error('Failed to delete image');
-          };
-
-          if (visitor.photoPublicId) await deleteImage(visitor.photoPublicId);
-          if (visitor.idImagePublicId) await deleteImage(visitor.idImagePublicId);
-
-          // Update Firestore ONLY after successful deletion
-          await updateDoc(doc(db, 'visitors', visitorDoc.id), {
-            imagesPurgedAt: serverTimestamp(),
-            // Optional: nullify publicIds to save space, but keeping them might be useful for auditing
-            // photoPublicId: null, 
-            // idImagePublicId: null,
-          });
-
-          purgedCount++;
-        } catch (e) {
-          console.error(`Failed to purge images for visitor ${visitorDoc.id}`, e);
-          failedCount++;
+        if (data.successCount === 0 || data.count === 0) {
+          hasMore = false;
         }
       }
 
-      toast.success(`Purge complete: ${purgedCount} visitors purged. ${failedCount > 0 ? `(${failedCount} failed)` : ''}`);
+      toast.success(`Purge complete: ${totalPurged} visitors purged.`);
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || 'Purge failed');

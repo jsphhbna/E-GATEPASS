@@ -55,6 +55,7 @@ export interface GatePass {
   visitorName: string;
   purpose: string;
   photoPublicId: string;
+  idImagePublicId: string | null;
   source: PassSource;
   status: PassStatus;
   validFrom: Timestamp;

@@ -178,6 +178,7 @@ export function KioskPage() {
         visitorName: formData.fullName,
         purpose: formData.purpose,
         photoPublicId,
+        idImagePublicId: idImagePublicId || null,
         source: 'kiosk',
         status: 'issued', // walk-ins go to 'issued', entry scanner makes them 'pending'
         validFrom: Timestamp.fromDate(validFrom),

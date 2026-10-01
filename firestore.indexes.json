@@ -23,6 +23,14 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "timeIn", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "visitors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "imagesPurgedAt", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

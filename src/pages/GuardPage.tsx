@@ -365,150 +365,212 @@ export function GuardPage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredPasses.map((pass) => (
-            <div
-              key={pass.id}
-              className="overflow-hidden rounded-lg border"
-              style={{
-                backgroundColor: 'var(--color-surface)',
-                borderColor: isPendingLong(pass)
-                  ? 'var(--color-warning)'
-                  : 'var(--color-border)',
-                borderWidth: isPendingLong(pass) ? '2px' : '1px',
-                borderRadius: 'var(--radius-md)',
-                boxShadow: 'var(--shadow-sm)',
-              }}
-            >
-              {/* Pending-long indicator */}
-              {isPendingLong(pass) && (
+          {filteredPasses.map((pass, index) => {
+            const isActive = index === 0;
+
+            if (isActive) {
+              return (
                 <div
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+                  key={pass.id}
+                  className="col-span-full overflow-hidden rounded-lg border"
                   style={{
-                    backgroundColor: 'var(--color-warning-light)',
-                    color: 'var(--color-warning)',
+                    backgroundColor: 'var(--color-surface)',
+                    borderColor: isPendingLong(pass) ? 'var(--color-warning)' : 'var(--color-border)',
+                    borderWidth: isPendingLong(pass) ? '2px' : '1px',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: 'var(--shadow-md)',
                   }}
                 >
-                  <Volume2 className="h-3 w-3" />
-                  Pending for over 30 seconds
-                </div>
-              )}
-
-              <div className="p-4">
-                {/* Photo + Info */}
-                <div className="mb-3 flex gap-3">
-                  <AuthenticatedImage
-                    publicId={pass.photoPublicId}
-                    alt={`Photo of ${pass.visitorName}`}
-                    className="h-20 w-16 flex-shrink-0 rounded-md object-cover"
-                  />
-                  <div className="flex-1">
-                    <h3
-                      className="text-sm font-bold"
-                      style={{ color: 'var(--color-text-primary)' }}
+                  {isPendingLong(pass) && (
+                    <div
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold"
+                      style={{ backgroundColor: 'var(--color-warning-light)', color: 'var(--color-warning)' }}
                     >
-                      {pass.visitorName}
-                    </h3>
-                    <p
-                      className="mt-0.5 text-xs"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      {pass.purpose}
-                    </p>
-                    <div className="mt-2 flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                      <Clock className="h-3 w-3" />
-                      {pass.scannedAt
-                        ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString()
-                        : '—'}
+                      <Volume2 className="h-4 w-4" />
+                      Pending for over 30 seconds
                     </div>
-                    {pass.gate && (
-                      <p className="mt-0.5 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                        Gate: {pass.gate}
-                      </p>
+                  )}
+
+                  <div className="p-5">
+                    <div className="mb-5 grid gap-5 md:grid-cols-3">
+                      {/* Panel 1: Info */}
+                      <div className="flex flex-col justify-center border-b pb-4 md:border-b-0 md:border-r md:pb-0 md:pr-4">
+                        <h3 className="text-xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                          {pass.visitorName}
+                        </h3>
+                        <p className="mt-1 text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                          {pass.purpose}
+                        </p>
+                        <div className="mt-4 space-y-1">
+                          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                            <Clock className="h-4 w-4" />
+                            <span>
+                              Scanned: {pass.scannedAt ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString() : '—'}
+                            </span>
+                          </div>
+                          {pass.gate && (
+                            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                              <Shield className="h-4 w-4" />
+                              <span>Gate: {pass.gate}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                            <CheckCircle2 className="h-4 w-4" />
+                            <span>
+                              Valid: {new Date(pass.validFrom.toMillis()).toLocaleTimeString()} - {new Date(pass.validUntil.toMillis()).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Panel 2: Face Photo */}
+                      <div className="flex flex-col items-center border-b pb-4 md:border-b-0 md:border-r md:pb-0 md:pr-4">
+                        <span className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">Live Photo</span>
+                        <AuthenticatedImage
+                          publicId={pass.photoPublicId}
+                          alt="Face Photo"
+                          className="h-48 w-40 rounded-lg object-cover shadow-sm bg-gray-100"
+                        />
+                      </div>
+
+                      {/* Panel 3: ID Photo */}
+                      <div className="flex flex-col items-center">
+                        <span className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">Valid ID</span>
+                        {pass.idImagePublicId ? (
+                          <AuthenticatedImage
+                            publicId={pass.idImagePublicId}
+                            alt="ID Photo"
+                            className="h-48 w-full max-w-xs rounded-lg object-contain shadow-sm bg-gray-100"
+                          />
+                        ) : (
+                          <div className="flex h-48 w-full max-w-xs items-center justify-center rounded-lg bg-gray-100 text-xs font-medium text-gray-400">
+                            No ID (Peak Mode / Walk-in)
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    {rejectingId === pass.id ? (
+                      <div className="space-y-3">
+                        <select
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                          className="w-full rounded-md border px-3 py-2.5 text-sm outline-none"
+                          style={{
+                            borderColor: 'var(--color-border)',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--color-overlay)',
+                          }}
+                        >
+                          <option value="">Select reason…</option>
+                          {rejectionReasons.map((reason) => (
+                            <option key={reason} value={reason}>
+                              {reason}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectingId(null);
+                              setRejectReason('');
+                            }}
+                            className="flex-1 rounded-md border px-4 py-2.5 text-sm font-medium"
+                            style={{
+                              borderColor: 'var(--color-border)',
+                              borderRadius: 'var(--radius-sm)',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleReject(pass)}
+                            disabled={!rejectReason}
+                            className="flex-1 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                            style={{
+                              backgroundColor: 'var(--color-danger)',
+                              borderRadius: 'var(--radius-sm)',
+                            }}
+                          >
+                            Confirm Reject
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleApprove(pass)}
+                          className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-3 text-sm font-semibold text-white"
+                          style={{
+                            backgroundColor: 'var(--color-success)',
+                            borderRadius: 'var(--radius-sm)',
+                          }}
+                        >
+                          <CheckCircle2 className="h-5 w-5" />
+                          Approve Visitor
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRejectingId(pass.id)}
+                          className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-3 text-sm font-semibold"
+                          style={{
+                            borderColor: 'var(--color-danger)',
+                            color: 'var(--color-danger)',
+                            borderRadius: 'var(--radius-sm)',
+                          }}
+                        >
+                          <XCircle className="h-5 w-5" />
+                          Reject
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
+              );
+            }
 
-                {/* Actions */}
-                {rejectingId === pass.id ? (
-                  <div className="space-y-2">
-                    <select
-                      value={rejectReason}
-                      onChange={(e) => setRejectReason(e.target.value)}
-                      className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                      style={{
-                        borderColor: 'var(--color-border)',
-                        borderRadius: 'var(--radius-sm)',
-                        backgroundColor: 'var(--color-overlay)',
-                      }}
-                    >
-                      <option value="">Select reason…</option>
-                      {rejectionReasons.map((reason) => (
-                        <option key={reason} value={reason}>
-                          {reason}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRejectingId(null);
-                          setRejectReason('');
-                        }}
-                        className="flex-1 rounded-md border px-3 py-2 text-xs font-medium"
-                        style={{
-                          borderColor: 'var(--color-border)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleReject(pass)}
-                        disabled={!rejectReason}
-                        className="flex-1 rounded-md px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                        style={{
-                          backgroundColor: 'var(--color-danger)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                      >
-                        Confirm Reject
-                      </button>
+            // ==========================================
+            // COMPACT CARD (Queued Passes)
+            // ==========================================
+            return (
+              <div
+                key={pass.id}
+                className="overflow-hidden rounded-lg border opacity-75 transition-opacity hover:opacity-100"
+                style={{
+                  backgroundColor: 'var(--color-surface)',
+                  borderColor: 'var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                }}
+              >
+                <div className="p-3">
+                  <div className="flex items-start gap-3">
+                    {/* Placeholder icon instead of full image */}
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+                      <Shield className="h-5 w-5 text-gray-400" />
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <h3 className="truncate text-sm font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                        {pass.visitorName}
+                      </h3>
+                      <p className="truncate text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                        {pass.purpose}
+                      </p>
+                      <div className="mt-1 flex items-center gap-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                        <Clock className="h-3 w-3" />
+                        {pass.scannedAt ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString() : '—'}
+                        {pass.gate && ` • ${pass.gate}`}
+                      </div>
                     </div>
                   </div>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleApprove(pass)}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2.5 text-sm font-semibold text-white"
-                      style={{
-                        backgroundColor: 'var(--color-success)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRejectingId(pass.id)}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-semibold"
-                      style={{
-                        borderColor: 'var(--color-danger)',
-                        color: 'var(--color-danger)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <XCircle className="h-4 w-4" />
-                      Reject
-                    </button>
-                  </div>
-                )}
+                  {/* Note: Actions hidden on compact cards to enforce sequential processing, or we can leave a tiny "Make Active" button, but since it auto-promotes when the first is resolved, it's fine. */}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </main>
