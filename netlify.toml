@@ -5,6 +5,8 @@
 
 [build.environment]
   SECRETS_SCAN_OMIT_PATHS = ".firebaserc"
+  AWS_LAMBDA_JS_RUNTIME = "nodejs24.x"
+  NODE_OPTIONS = "--experimental-require-module"
 
 [functions]
   external_node_modules = ["firebase-admin"]
