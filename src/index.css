@@ -205,3 +205,10 @@ button:active,
 .animate-spin {
   animation: spin 1s linear infinite;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep loading progress visible with a slower rotation. */
+  .animate-spin {
+    animation-duration: 2s !important;
+  }
+}
