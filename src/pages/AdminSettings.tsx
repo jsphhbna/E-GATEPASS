@@ -4,11 +4,6 @@ import {
   getDoc,
   setDoc,
   updateDoc,
-  collection,
-  query,
-  where,
-  getDocs,
-  serverTimestamp,
 } from 'firebase/firestore';
 import { db, auth } from '@/lib/firebase';
 import { Save, Trash2, AlertTriangle } from 'lucide-react';
