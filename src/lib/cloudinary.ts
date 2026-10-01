@@ -88,7 +88,9 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder = 'e-ga
   });
 
   if (!signRes.ok) {
-    throw new Error('Failed to get upload signature');
+    const errorText = await signRes.text().catch(() => 'No response body');
+    console.error('Cloudinary sign failed. Status:', signRes.status, 'Response:', errorText);
+    throw new Error('Failed to get upload signature: ' + errorText);
   }
 
   const { timestamp, signature, apiKey, cloudName }: SignatureResponse = await signRes.json();

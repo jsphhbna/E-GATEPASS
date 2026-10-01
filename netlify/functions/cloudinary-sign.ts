@@ -62,12 +62,12 @@ export const handler: Handler = async (event) => {
         cloudName: process.env.CLOUDINARY_CLOUD_NAME,
       }),
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('Cloudinary Sign Error:', error);
     return {
       statusCode: 403,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Authentication failed or internal error' }),
+      body: JSON.stringify({ error: 'Authentication failed or internal error', details: error.message }),
     };
   }
 };
