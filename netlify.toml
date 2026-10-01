@@ -21,8 +21,4 @@
   to = "/.netlify/functions/:splat"
   status = 200
 
-# SPA fallback — client-side routing
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+
