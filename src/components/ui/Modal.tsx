@@ -7,6 +7,7 @@ interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  description?: ReactNode;
   children: ReactNode;
   className?: string;
   preventClose?: boolean;
@@ -28,7 +29,8 @@ export function Modal({
   className = '', 
   preventClose = false,
   size = 'md',
-  hideTitleRow = false
+  hideTitleRow = false,
+  description
 }: ModalProps) {
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => !preventClose && !open && onClose()}>
@@ -58,6 +60,11 @@ export function Modal({
                 <Dialog.Title className="text-xl font-bold text-[var(--color-text-primary)]">
                   {title}
                 </Dialog.Title>
+                {description && (
+                  <Dialog.Description className="sr-only">
+                    {description}
+                  </Dialog.Description>
+                )}
                 {!preventClose && (
                   <Dialog.Close asChild>
                     <button

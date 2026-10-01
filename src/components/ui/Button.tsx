@@ -6,10 +6,11 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: 'sm' | 'md' | 'lg';
   icon?: ReactNode;
+  loading?: boolean;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className = '', variant = 'primary', size = 'md', icon, children, disabled, ...props }, ref) => {
+  ({ className = '', variant = 'primary', size = 'md', icon, children, disabled, loading, ...props }, ref) => {
     const baseStyles = 'inline-flex items-center justify-center gap-2 font-semibold transition-colors rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] disabled:opacity-50 disabled:cursor-not-allowed';
     
     const sizeStyles = {
@@ -30,11 +31,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
-        disabled={disabled}
+        disabled={disabled || loading}
         className={`${baseStyles} ${sizeStyles[size]} ${variantStyles[variant]} ${className}`.trim()}
         {...props}
       >
-        {icon && <span className="flex-shrink-0">{icon}</span>}
+        {loading ? (
+          <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent flex-shrink-0" />
+        ) : icon ? (
+          <span className="flex-shrink-0">{icon}</span>
+        ) : null}
         {children}
       </button>
     );

@@ -11,10 +11,11 @@ import {
   AlertTriangle,
   ClipboardList,
   LogOut,
-  Shield,
   Menu,
   X,
 } from 'lucide-react';
+import { BrandMark } from '@/components/BrandMark';
+import { ConfirmModal } from '@/components/ui';
 import { useState } from 'react';
 import type { AppUser } from '@/types';
 
@@ -35,9 +36,18 @@ export function AdminPage() {
 
   const adminName = (userData as AppUser | null)?.name ?? 'Admin';
 
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+
   async function handleSignOut() {
-    await signOut(auth);
-    navigate('/login', { replace: true });
+    setIsSigningOut(true);
+    try {
+      await signOut(auth);
+      navigate('/login', { replace: true });
+    } finally {
+      setIsSigningOut(false);
+      setShowSignOutModal(false);
+    }
   }
 
   return (
@@ -81,7 +91,7 @@ export function AdminPage() {
           style={{ borderColor: 'var(--color-border)' }}
         >
           <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5" style={{ color: 'var(--color-brand)' }} />
+            <BrandMark size="sm" />
             <span
               className="text-sm font-bold"
               style={{ color: 'var(--color-text-primary)' }}
@@ -133,7 +143,7 @@ export function AdminPage() {
           </p>
           <button
             type="button"
-            onClick={handleSignOut}
+            onClick={() => setShowSignOutModal(true)}
             className="flex w-full items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium"
             style={{
               borderColor: 'var(--color-border)',
@@ -146,6 +156,18 @@ export function AdminPage() {
           </button>
         </div>
       </aside>
+
+      <ConfirmModal
+        isOpen={showSignOutModal}
+        onClose={() => setShowSignOutModal(false)}
+        title="Confirm Sign Out"
+        description="Are you sure you want to log out of your account?"
+        onConfirm={handleSignOut}
+        confirmText={isSigningOut ? "Signing Out..." : "Sign Out"}
+        cancelText="Cancel"
+        isDestructive={true}
+        loading={isSigningOut}
+      />
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto p-4 md:p-6">

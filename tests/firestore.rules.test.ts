@@ -45,8 +45,8 @@ describe('E-GatePass Firestore Rules', () => {
     return testEnv.authenticatedContext('device_uid');
   };
 
-  const getUnauthedContext = () => {
-    return testEnv.unauthenticatedContext();
+  const getAnonContext = () => {
+    return testEnv.authenticatedContext('anon_uid', { isAnonymous: true });
   };
 
   beforeEach(async () => {
@@ -71,15 +71,16 @@ describe('E-GatePass Firestore Rules', () => {
   });
 
   describe('Visitors Collection', () => {
-    it('allows anyone (unauthenticated) to create a visitor doc', async () => {
-      const unauthedDb = getUnauthedContext().firestore();
-      await assertSucceeds(unauthedDb.collection('visitors').add({
-        fullName: 'Test Visitor',
+    it('allows anonymous users to create a visitor doc', async () => {
+      const anonDb = getAnonContext().firestore();
+      await assertSucceeds(anonDb.collection('visitors').add({
+        firstName: 'Test',
+        lastName: 'Visitor',
       }));
     });
 
     it('prevents unauthenticated users from reading visitor docs', async () => {
-      const unauthedDb = getUnauthedContext().firestore();
+      const unauthedDb = testEnv.unauthenticatedContext().firestore();
       await assertFails(unauthedDb.collection('visitors').get());
     });
 
@@ -92,10 +93,12 @@ describe('E-GatePass Firestore Rules', () => {
   });
 
   describe('GatePasses Collection', () => {
-    it('allows anyone to create a gate pass', async () => {
-      const unauthedDb = getUnauthedContext().firestore();
-      await assertSucceeds(unauthedDb.collection('gatePasses').add({
+    it('allows anonymous users to create a gate pass', async () => {
+      const anonDb = getAnonContext().firestore();
+      await assertSucceeds(anonDb.collection('gatePasses').add({
         status: 'issued',
+        visitorId: 'visitor123',
+        idImagePublicId: 'image123',
       }));
     });
 

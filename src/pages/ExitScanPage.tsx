@@ -182,7 +182,7 @@ export function ExitScanPage() {
 
   const statusConfig = {
     ready: {
-      bg: 'hsl(270, 60%, 45%)',
+      bg: 'var(--color-brand)',
       icon: <LogOutIcon className="h-8 w-8 text-white" />,
     },
     processing: {

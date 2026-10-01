@@ -14,6 +14,7 @@ import {
   ArrowLeftCircle,
 } from 'lucide-react';
 import { startOfDay, endOfDay, subDays, format } from 'date-fns';
+import { Card, StatCard } from '@/components/ui';
 
 export function AdminDashboard() {
   const [loading, setLoading] = useState(true);
@@ -127,7 +128,7 @@ export function AdminDashboard() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-brand)] border-t-transparent"></div>
       </div>
     );
   }
@@ -147,135 +148,79 @@ export function AdminDashboard() {
         <StatCard
           title="Total Visitors Today"
           value={stats.todayTotal}
-          icon={Users}
-          color="var(--color-brand)"
-          bgColor="var(--color-brand-light)"
+          icon={<Users className="h-5 w-5 text-[var(--color-brand)]" />}
         />
         <StatCard
           title="Currently Inside"
           value={stats.todayInside}
-          icon={ArrowRightCircle}
-          color="var(--color-success)"
-          bgColor="var(--color-success-light)"
+          icon={<ArrowRightCircle className="h-5 w-5 text-[var(--color-success)]" />}
+          trend={`${stats.todayInside} visitors`}
+          trendUp={true}
         />
         <StatCard
           title="Exited"
           value={stats.todayExited}
-          icon={ArrowLeftCircle}
-          color="var(--color-text-secondary)"
-          bgColor="var(--color-surface)"
+          icon={<ArrowLeftCircle className="h-5 w-5 text-[var(--color-text-secondary)]" />}
         />
         <StatCard
           title="Pending Approval"
           value={stats.todayPending}
-          icon={Clock}
-          color="var(--color-warning)"
-          bgColor="var(--color-warning-light)"
+          icon={<Clock className="h-5 w-5 text-[var(--color-warning)]" />}
         />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Simple Bar Chart for last 7 days */}
-        <div
-          className="rounded-xl border p-5"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-          <h2 className="mb-4 text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+        <Card className="p-6">
+          <h2 className="mb-6 text-xl font-bold text-[var(--color-text-primary)]">
             Last 7 Days (Issued Passes)
           </h2>
-          <div className="flex h-48 items-end gap-2">
+          <div className="flex h-48 items-end gap-3 px-2">
             {historicalData.map((data, i) => {
               const max = Math.max(...historicalData.map(d => d.count), 10); // min height baseline
               const height = `${(data.count / max) * 100}%`;
               return (
                 <div key={i} className="flex flex-1 flex-col items-center justify-end group">
                   <div 
-                    className="w-full max-w-[40px] rounded-t-sm transition-all duration-300 group-hover:opacity-80"
+                    className="w-full max-w-[48px] rounded-t-md transition-all duration-300 group-hover:opacity-80 group-hover:scale-y-105 origin-bottom shadow-sm"
                     style={{ height, backgroundColor: 'var(--color-brand)' }}
                     title={`${data.count} passes`}
                   />
-                  <span className="mt-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  <span className="mt-3 text-[11px] font-medium text-[var(--color-text-muted)]">
                     {data.date.split(' ')[1]}
                   </span>
                 </div>
               );
             })}
           </div>
-        </div>
+        </Card>
 
         {/* Quick Actions / Summary */}
-        <div
-          className="rounded-xl border p-5"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-           <h2 className="mb-4 text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+        <Card className="p-6">
+           <h2 className="mb-6 text-xl font-bold text-[var(--color-text-primary)]">
             Today's Summary
           </h2>
-          <div className="space-y-4">
-             <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--color-border)' }}>
-               <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Approved & Inside</span>
-               <span className="font-bold text-green-600">{stats.todayInside}</span>
+          <div className="space-y-5">
+             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Approved & Inside</span>
+               <span className="font-bold text-lg text-[var(--color-success)]">{stats.todayInside}</span>
              </div>
-             <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--color-border)' }}>
-               <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Completed Visits</span>
-               <span className="font-bold text-gray-600">{stats.todayExited}</span>
+             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Completed Visits</span>
+               <span className="font-bold text-lg text-[var(--color-text-primary)]">{stats.todayExited}</span>
              </div>
-             <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--color-border)' }}>
-               <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Rejected</span>
-               <span className="font-bold text-red-600">{stats.todayRejected}</span>
+             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Rejected</span>
+               <span className="font-bold text-lg text-[var(--color-danger)]">{stats.todayRejected}</span>
              </div>
-             <div className="flex items-center justify-between pt-2">
-               <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>Avg Decision Time</span>
-               <span className="font-bold text-indigo-600">{stats.avgDecisionTime}</span>
+             <div className="flex items-center justify-between pt-1">
+               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Avg Decision Time</span>
+               <span className="font-bold text-lg text-[var(--color-brand)]">{stats.avgDecisionTime}</span>
              </div>
           </div>
-        </div>
+        </Card>
       </div>
     </div>
   );
 }
 
-function StatCard({
-  title,
-  value,
-  icon: Icon,
-  color,
-  bgColor,
-}: {
-  title: string;
-  value: number;
-  icon: any;
-  color: string;
-  bgColor: string;
-}) {
-  return (
-    <div
-      className="flex items-center gap-4 rounded-xl border p-5"
-      style={{
-        backgroundColor: 'var(--color-surface)',
-        borderColor: 'var(--color-border)',
-      }}
-    >
-      <div
-        className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg"
-        style={{ backgroundColor: bgColor }}
-      >
-        <Icon className="h-6 w-6" style={{ color }} />
-      </div>
-      <div>
-        <p className="text-sm font-medium" style={{ color: 'var(--color-text-muted)' }}>
-          {title}
-        </p>
-        <h3 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
-          {value}
-        </h3>
-      </div>
-    </div>
-  );
-}

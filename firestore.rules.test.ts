@@ -106,4 +106,57 @@ describe('EARIST E-GatePass Firestore Rules', () => {
       })
     );
   });
+
+  it('valid create with the new name fields succeeds', async () => {
+    const visitorAuth = testEnv.authenticatedContext('visitor123', { isAnonymous: true });
+    const visitorDb = visitorAuth.firestore();
+
+    await assertSucceeds(
+      visitorDb.collection('visitors').doc('visitor123').set({
+        firstName: 'John',
+        middleName: 'M',
+        lastName: 'Doe',
+        fullName: 'John M Doe',
+        purpose: 'Visit',
+        contactNumber: '1234567890',
+        visitDate: '2026-10-01',
+        createdByUid: 'visitor123',
+        createdAt: new Date(),
+        imagesPurgedAt: null,
+      })
+    );
+  });
+
+  it('create missing firstName or lastName is denied', async () => {
+    const visitorAuth = testEnv.authenticatedContext('visitor123', { isAnonymous: true });
+    const visitorDb = visitorAuth.firestore();
+
+    // Missing lastName
+    await assertFails(
+      visitorDb.collection('visitors').doc('visitor123').set({
+        firstName: 'John',
+        fullName: 'John Doe',
+        purpose: 'Visit',
+        contactNumber: '1234567890',
+        visitDate: '2026-10-01',
+        createdByUid: 'visitor123',
+        createdAt: new Date(),
+        imagesPurgedAt: null,
+      })
+    );
+
+    // Missing firstName
+    await assertFails(
+      visitorDb.collection('visitors').doc('visitor123').set({
+        lastName: 'Doe',
+        fullName: 'John Doe',
+        purpose: 'Visit',
+        contactNumber: '1234567890',
+        visitDate: '2026-10-01',
+        createdByUid: 'visitor123',
+        createdAt: new Date(),
+        imagesPurgedAt: null,
+      })
+    );
+  });
 });

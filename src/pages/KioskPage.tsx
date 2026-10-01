@@ -13,18 +13,38 @@ import {
   CheckCircle2,
   Printer,
   ArrowRight,
-  Shield,
+  ArrowLeft,
   AlertCircle,
   X,
+  RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, parse, startOfDay, set as setDate } from 'date-fns';
+import { Button, Card, Input, Textarea, FormField, Stepper } from '@/components/ui';
+import { BrandMark } from '@/components/BrandMark';
+
+const nameRegex = /^[\p{L}\s\-'.]+$/u;
 
 const kioskPassSchema = z.object({
-  fullName: z
+  firstName: z
     .string()
-    .min(2, 'Full name must be at least 2 characters')
-    .max(100, 'Full name is too long'),
+    .trim()
+    .min(2, 'First name must be at least 2 characters')
+    .max(50, 'First name is too long')
+    .regex(nameRegex, 'Invalid characters in name'),
+  middleName: z
+    .string()
+    .trim()
+    .max(50, 'Middle name is too long')
+    .regex(nameRegex, 'Invalid characters in name')
+    .optional()
+    .or(z.literal('')),
+  lastName: z
+    .string()
+    .trim()
+    .min(2, 'Last name must be at least 2 characters')
+    .max(50, 'Last name is too long')
+    .regex(nameRegex, 'Invalid characters in name'),
   contactNumber: z
     .string()
     .min(7, 'Contact number must be at least 7 digits')
@@ -152,8 +172,16 @@ export function KioskPage() {
       const visitorRef = doc(collection(db, 'visitors'));
       const visitorId = visitorRef.id;
 
+      const composedFullName = [formData.firstName, formData.middleName, formData.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ');
+
       await setDoc(visitorRef, {
-        fullName: formData.fullName,
+        firstName: formData.firstName,
+        middleName: formData.middleName || '',
+        lastName: formData.lastName,
+        fullName: composedFullName,
         contactNumber: formData.contactNumber,
         purpose: formData.purpose,
         visitDate: formData.visitDate,
@@ -175,7 +203,7 @@ export function KioskPage() {
 
       await setDoc(gatePassRef, {
         visitorId,
-        visitorName: formData.fullName,
+        visitorName: composedFullName,
         purpose: formData.purpose,
         photoPublicId,
         idImagePublicId: idImagePublicId || null,
@@ -227,160 +255,132 @@ export function KioskPage() {
     setStep('form');
   }
 
+  const steps = [
+    { id: 'form', title: 'Details' },
+    { id: 'photo', title: 'Photo' },
+    ...(!isPeakMode ? [{ id: 'id', title: 'Upload ID' }] : []),
+    { id: 'review', title: 'Review' },
+  ];
+
+  const currentStepIndex = 
+    step === 'done' || step === 'generating' ? steps.length :
+    steps.findIndex(s => s.id === step);
+
   return (
-    <main
-      className="flex min-h-dvh flex-col items-center justify-start px-4 py-8"
-      style={{ backgroundColor: 'var(--color-canvas)' }}
-    >
+    <main className="flex min-h-dvh flex-col items-center justify-start px-4 py-8 bg-[var(--color-canvas)]">
       <div className="w-full max-w-lg print:w-full print:max-w-none print:p-0">
         
         {/* Header - Hidden on print */}
-        <div className="mb-6 text-center print:hidden">
-          <div
-            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: 'var(--color-brand-light)' }}
-          >
-            <Shield className="h-6 w-6" style={{ color: 'var(--color-brand)' }} />
-          </div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+        <div className="mb-8 text-center print:hidden">
+          <BrandMark size="lg" className="mx-auto mb-4" />
+          <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">
             Walk-in Registration Kiosk
           </h1>
         </div>
 
+        {/* Step Indicator */}
+        {step !== 'done' && step !== 'generating' && (
+          <Stepper steps={steps} currentStepIndex={currentStepIndex} className="mb-8 px-4 print:hidden" />
+        )}
+
         {/* Card container */}
-        <div
-          className="rounded-xl p-6 print:shadow-none print:p-0"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            boxShadow: 'var(--shadow-md)',
-          }}
-        >
+        <Card className="print:shadow-none print:p-0 print:border-0 print:bg-transparent">
           {step === 'form' && (
-            <form onSubmit={handleSubmit(onFormNext)} className="space-y-4" noValidate>
-              <div>
-                <label className="mb-1 block text-sm font-medium">Full Name</label>
-                <input
-                  type="text"
-                  {...register('fullName')}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                />
-                {errors.fullName && (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-red-500">
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.fullName.message}
-                  </p>
-                )}
+            <form onSubmit={handleSubmit(onFormNext)} className="space-y-5" noValidate>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField label="First Name" error={errors.firstName?.message}>
+                  <Input {...register('firstName')} placeholder="Juan" error={!!errors.firstName} />
+                </FormField>
+                <FormField label="Middle Name" hint="Optional" error={errors.middleName?.message}>
+                  <Input {...register('middleName')} placeholder="Santos" error={!!errors.middleName} />
+                </FormField>
+                <FormField label="Last Name" error={errors.lastName?.message}>
+                  <Input {...register('lastName')} placeholder="Dela Cruz" error={!!errors.lastName} />
+                </FormField>
               </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium">Contact Number</label>
-                <input
-                  type="tel"
-                  {...register('contactNumber')}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                />
-                {errors.contactNumber && (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-red-500">
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.contactNumber.message}
-                  </p>
-                )}
-              </div>
+              <FormField label="Contact Number" error={errors.contactNumber?.message}>
+                <Input type="tel" {...register('contactNumber')} placeholder="09171234567" error={!!errors.contactNumber} />
+              </FormField>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium">Purpose</label>
-                <textarea
-                  {...register('purpose')}
-                  rows={3}
-                  className="w-full resize-none rounded-md border px-3 py-2 text-sm outline-none"
-                />
-                {errors.purpose && (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-red-500">
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.purpose.message}
-                  </p>
-                )}
-              </div>
+              <FormField label="Purpose of Visit" error={errors.purpose?.message}>
+                <Textarea {...register('purpose')} rows={3} placeholder="e.g. Meeting with Prof. Santos, Room 201" error={!!errors.purpose} />
+              </FormField>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium">Visit Date</label>
-                <input
-                  type="date"
-                  {...register('visitDate')}
-                  min={today}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                />
-              </div>
+              <FormField label="Visit Date" error={errors.visitDate?.message}>
+                <Input type="date" {...register('visitDate')} min={today} error={!!errors.visitDate} />
+              </FormField>
 
-              <div className="rounded-md bg-blue-50 p-3 dark:bg-blue-900/20">
-                <label className="flex items-start gap-2 text-xs">
-                  <input type="checkbox" {...register('consent')} className="mt-0.5" />
-                  <span>
+              <div className="rounded-xl p-4 bg-[var(--color-brand-light)] border border-red-100">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" {...register('consent')} className="mt-1 h-4 w-4 rounded border-gray-300 text-[var(--color-earist-red)] focus:ring-[var(--color-earist-red)]" />
+                  <span className="text-sm text-[var(--color-text-primary)]">
                     I consent to the collection and processing of my personal information in accordance with the Data Privacy Act of 2012 (RA 10173).
                   </span>
                 </label>
                 {errors.consent && (
-                  <p className="mt-1 text-xs text-red-500">{errors.consent.message}</p>
+                  <p className="mt-2 flex items-center gap-1 text-xs text-[var(--color-danger)]" role="alert">
+                    <AlertCircle className="h-3 w-3" />
+                    {errors.consent.message}
+                  </p>
                 )}
               </div>
 
-              <button
-                type="submit"
-                disabled={!isValid}
-                className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-              >
+              <Button type="submit" disabled={!isValid} className="w-full" size="lg" icon={<ArrowRight className="h-4 w-4" />}>
                 Next: Take Photo
-                <ArrowRight className="h-4 w-4" />
-              </button>
+              </Button>
             </form>
           )}
 
           {step === 'photo' && (
-            <div className="space-y-4">
-              <h2 className="text-center text-lg font-semibold">Take Your Photo</h2>
-              <div className="relative mx-auto aspect-[3/4] w-full max-w-xs overflow-hidden rounded-lg bg-black">
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Take Your Photo</h2>
+              </div>
+              <div className="mx-auto w-full max-w-xs overflow-hidden rounded-xl border border-[var(--color-border)] shadow-sm bg-black aspect-[3/4] relative">
                 <video ref={webcam.videoRef} autoPlay playsInline muted className="h-full w-full object-cover -scale-x-100" />
               </div>
               <div className="flex gap-3">
-                <button type="button" onClick={() => setStep('form')} className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium">
+                <Button variant="secondary" type="button" onClick={() => setStep('form')} className="flex-1" icon={<ArrowLeft className="h-4 w-4" />}>
                   Back
-                </button>
-                <button type="button" onClick={onCapturePhoto} disabled={!webcam.isActive} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
-                  <Camera className="h-4 w-4" />
+                </Button>
+                <Button type="button" onClick={onCapturePhoto} disabled={!webcam.isActive} className="flex-1" icon={<Camera className="h-4 w-4" />}>
                   Capture
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {step === 'id' && (
-            <div className="space-y-4">
-              <h2 className="text-center text-lg font-semibold">Upload ID</h2>
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Upload ID</h2>
+              </div>
               {idPreview ? (
-                <div className="space-y-3">
-                  <div className="relative mx-auto max-w-xs overflow-hidden rounded-lg">
-                    <img src={idPreview} alt="ID preview" className="w-full" />
-                    <button type="button" onClick={() => setIdPreview(null)} className="absolute right-2 top-2 rounded-full bg-black/60 p-1 text-white">
+                <div className="space-y-4">
+                  <div className="relative mx-auto max-w-xs overflow-hidden rounded-xl border border-[var(--color-border)] shadow-sm">
+                    <img src={idPreview} alt="ID preview" className="w-full object-cover" />
+                    <button type="button" onClick={() => setIdPreview(null)} className="absolute right-2 top-2 rounded-full bg-black/60 hover:bg-black/80 transition-colors p-1 text-white">
                       <X className="h-4 w-4" />
                     </button>
                   </div>
                   <div className="flex gap-3">
-                    <button type="button" onClick={onRetakePhoto} className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium">
+                    <Button variant="secondary" type="button" onClick={onRetakePhoto} className="flex-1" icon={<RotateCcw className="h-4 w-4" />}>
                       Retake Photo
-                    </button>
-                    <button type="button" onClick={() => setStep('review')} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">
+                    </Button>
+                    <Button type="button" onClick={() => setStep('review')} className="flex-1" icon={<ArrowRight className="h-4 w-4" />}>
                       Review
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div
-                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
+                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-gray-50 hover:bg-gray-100 transition-colors"
                     onClick={() => fileInputRef.current?.click()}
                   >
-                    <Upload className="mb-2 h-8 w-8 text-gray-400" />
-                    <span className="text-sm font-medium">Tap to upload ID</span>
+                    <Upload className="mb-3 h-10 w-10 text-[var(--color-text-muted)]" />
+                    <span className="text-sm font-bold text-[var(--color-text-primary)]">Tap to upload ID</span>
                   </div>
                   <input ref={fileInputRef} type="file" accept="image/*" onChange={onIdFileChange} className="hidden" />
                 </div>
@@ -389,69 +389,69 @@ export function KioskPage() {
           )}
 
           {step === 'review' && (
-            <div className="space-y-4">
-              <h2 className="text-center text-lg font-semibold">Review Pass</h2>
-              {submitError && <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">{submitError}</div>}
+            <div className="space-y-6">
+              <h2 className="text-center text-lg font-bold text-[var(--color-text-primary)]">Review Pass</h2>
+              {submitError && <div className="rounded-md bg-red-50 p-3 text-sm text-red-600 border border-red-200">{submitError}</div>}
               
-              <div className="rounded-md bg-gray-50 p-3 text-sm dark:bg-gray-800">
-                <p><strong>Name:</strong> {getValues('fullName')}</p>
-                <p><strong>Purpose:</strong> {getValues('purpose')}</p>
+              <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)] text-sm">
+                <p className="mb-2"><strong className="text-[var(--color-text-secondary)]">Name:</strong> {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}</p>
+                <p><strong className="text-[var(--color-text-secondary)]">Purpose:</strong> {getValues('purpose')}</p>
               </div>
 
               <div className="flex gap-3">
-                <button type="button" onClick={() => {
+                <Button variant="secondary" type="button" onClick={() => {
                   if (isPeakMode) {
                     setStep('photo');
                   } else {
                     setStep('id');
                   }
-                }} className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium">
+                }} className="flex-1" icon={<ArrowLeft className="h-4 w-4" />}>
                   Back
-                </button>
-                <button type="button" onClick={onSubmit} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-green-600 px-4 py-2.5 text-sm font-semibold text-white">
+                </Button>
+                <Button type="button" onClick={onSubmit} className="flex-1" icon={<CheckCircle2 className="h-4 w-4" />}>
                   Generate
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {step === 'generating' && (
-            <div className="flex flex-col items-center justify-center py-12">
-              <div className="mb-4 h-10 w-10 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
-              <p className="text-sm font-medium">Generating gate pass…</p>
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-earist-red)]" />
+              <p className="text-xl font-bold text-[var(--color-text-primary)]">Generating gate pass…</p>
             </div>
           )}
 
           {step === 'done' && qrDataUrl && (
-            <div className="space-y-4 text-center print:text-left print:m-0">
-              <div className="print:hidden mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
-                <CheckCircle2 className="h-6 w-6 text-green-600" />
+            <div className="space-y-6 text-center print:text-left print:m-0 print:space-y-2">
+              <div className="print:hidden mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-[var(--color-success)] mb-2">
+                <CheckCircle2 className="h-8 w-8" />
               </div>
               
-              <h2 className="text-lg font-bold">Gate Pass (Walk-in)</h2>
+              <h2 className="text-2xl font-bold text-[var(--color-text-primary)] print:text-xl">Gate Pass (Walk-in)</h2>
 
-              <div className="mx-auto inline-block rounded-lg bg-white p-4 print:mx-0 print:p-0">
+              <div className="mx-auto inline-block rounded-2xl bg-white p-4 border-2 border-gray-100 shadow-sm print:mx-0 print:p-0 print:border-0 print:shadow-none">
                 <img src={qrDataUrl} alt="QR Code" className="h-64 w-64 print:h-48 print:w-48" />
               </div>
 
-              <div className="rounded-md bg-gray-50 p-3 text-left text-sm dark:bg-gray-800 print:bg-transparent print:p-0">
-                <p><strong>Name:</strong> {getValues('fullName')}</p>
-                <p><strong>Date:</strong> {getValues('visitDate')}</p>
-                <p><strong>Purpose:</strong> {getValues('purpose')}</p>
-                <p><strong>Valid:</strong> 08:00 AM – 05:00 PM</p>
+              <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)] text-left text-sm print:bg-transparent print:p-0 print:border-0">
+                <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Name:</strong> {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}</p>
+                <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Date:</strong> {getValues('visitDate')}</p>
+                <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Purpose:</strong> {getValues('purpose')}</p>
+                <p><strong className="text-[var(--color-text-secondary)]">Valid:</strong> 08:00 AM – 05:00 PM</p>
               </div>
 
-              <div className="flex gap-2 print:hidden">
-                <button type="button" onClick={handlePrint} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-gray-800 px-4 py-2.5 text-sm font-semibold text-white">
-                  <Printer className="h-4 w-4" /> Print Pass
-                </button>
-                <button type="button" onClick={handleNextVisitor} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">
+              <div className="flex gap-3 print:hidden">
+                <Button variant="secondary" type="button" onClick={handlePrint} className="flex-1" icon={<Printer className="h-4 w-4" />}>
+                  Print Pass
+                </Button>
+                <Button type="button" onClick={handleNextVisitor} className="flex-1">
                   Next Visitor
-                </button>
+                </Button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
       </div>
     </main>
   );

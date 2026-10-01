@@ -14,6 +14,7 @@
   targetPort = 5173
   port = 8888
   autoLaunch = false
+  framework = "#custom"
 
 # Proxy API routes to Netlify Functions
 [[redirects]]
@@ -21,4 +22,27 @@
   to = "/.netlify/functions/:splat"
   status = 200
 
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
 
+[[headers]]
+  for = "/*.tsx"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+[[headers]]
+  for = "/*.ts"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Content-Type = "application/javascript"
+
+[[headers]]
+  for = "/*.jsx"
+  [headers.values]
+    Content-Type = "application/javascript"

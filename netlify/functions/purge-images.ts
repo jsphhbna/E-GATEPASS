@@ -1,7 +1,8 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { adminAuth } from './firebase-admin'; // Ensures app is initialized
+import { adminAuth } from './firebase-admin';
+import crypto from 'crypto';
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -17,16 +18,31 @@ export const handler: Handler = async (event) => {
     return { statusCode: 405, body: 'Method not allowed' };
   }
 
-  // Verify CRON_SECRET or Admin Token
+  // Parse body for dryRun
+  let body = {};
+  try {
+    if (event.body) {
+      body = JSON.parse(event.body);
+    }
+  } catch (e) {
+    // ignore
+  }
+  const isDryRun = !!(body as any).dryRun;
+
   const cronSecret = process.env.CRON_SECRET;
   const providedSecret = event.headers['x-cron-secret'] || event.headers['X-Cron-Secret'];
   
   let isAuthenticated = false;
 
-  if (cronSecret && providedSecret === cronSecret) {
-    isAuthenticated = true;
-  } else {
-    // Fallback: Check if request is from an Admin via Authorization header
+  if (cronSecret && providedSecret) {
+    const a = Buffer.from(cronSecret);
+    const b = Buffer.from(providedSecret);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      isAuthenticated = true;
+    }
+  }
+
+  if (!isAuthenticated) {
     const authHeader = event.headers.authorization || event.headers.Authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
@@ -36,11 +52,15 @@ export const handler: Handler = async (event) => {
         const db = getFirestore();
         const userDoc = await db.collection('users').doc(decodedToken.uid).get();
         
-        if (userDoc.exists && userDoc.data()?.role === 'admin') {
-          isAuthenticated = true;
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          if (userData?.role === 'admin' && userData?.active === true) {
+            isAuthenticated = true;
+          }
         }
       } catch (err) {
-        console.error('Admin verification failed:', err);
+        // Return 401 immediately on token error, never log the token
+        return { statusCode: 401, body: 'Unauthorized: Invalid token' };
       }
     }
   }
@@ -55,8 +75,8 @@ export const handler: Handler = async (event) => {
     // 1. Fetch settings to get retentionDays
     const settingsDoc = await db.collection('settings').doc('app').get();
     const settings = settingsDoc.data();
-    if (!settings || typeof settings.retentionDays !== 'number') {
-      return { statusCode: 500, body: 'Missing retentionDays in settings' };
+    if (!settings || typeof settings.retentionDays !== 'number' || settings.retentionDays < 1) {
+      return { statusCode: 500, body: 'Invalid or missing retentionDays in settings. Must be >= 1.' };
     }
 
     const retentionDays = settings.retentionDays;
@@ -69,13 +89,32 @@ export const handler: Handler = async (event) => {
     const snapshot = await db.collection('visitors')
       .where('imagesPurgedAt', '==', null)
       .where('createdAt', '<=', cutoffDate)
-      .limit(50) // Process in small batches to avoid timeouts
+      .limit(25) // Cap each real run to a small batch
       .get();
 
     if (snapshot.empty) {
       return {
         statusCode: 200,
         body: JSON.stringify({ message: 'No images to purge at this time', count: 0 }),
+      };
+    }
+
+    if (isDryRun) {
+      const visitorIds = snapshot.docs.map(doc => doc.id);
+      let imageCount = 0;
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.photoPublicId) imageCount++;
+        if (data.idImagePublicId) imageCount++;
+      });
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          message: `DRY RUN: Would purge ${snapshot.docs.length} visitors and ${imageCount} images.`,
+          visitorsAffected: snapshot.docs.length,
+          imagesAffected: imageCount,
+          visitorIds,
+        }),
       };
     }
 
@@ -105,10 +144,16 @@ export const handler: Handler = async (event) => {
 
         successCount++;
       } catch (err) {
-        console.error(`Failed to purge visitor ${doc.id}:`, err);
-        errors.push({ id: doc.id, error: String(err) });
+        errors.push({ id: doc.id, error: 'Failed to purge' });
       }
     }
+
+    // Check how many remain
+    const remainingSnapshot = await db.collection('visitors')
+      .where('imagesPurgedAt', '==', null)
+      .where('createdAt', '<=', cutoffDate)
+      .limit(1)
+      .get();
 
     return {
       statusCode: 200,
@@ -116,10 +161,10 @@ export const handler: Handler = async (event) => {
         message: `Successfully purged images for ${successCount} visitors.`,
         successCount,
         errors,
+        hasMore: !remainingSnapshot.empty
       }),
     };
   } catch (error) {
-    console.error('Purge error:', error);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: 'Internal Server Error' }),

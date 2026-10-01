@@ -2,17 +2,19 @@ import { useState } from 'react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
-import { ShieldCheck } from 'lucide-react';
+import { BrandMark } from '@/components/BrandMark';
 import { toast } from 'sonner';
+import { Button, Modal } from '@/components/ui';
 
 export function PrivacyModal() {
   const { uid, userData } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [accepted, setAccepted] = useState(false);
 
   // Only show if user is admin/guard and hasn't accepted yet
   if (!uid || !userData || !('privacyAcceptedAt' in userData)) return null;
   if (userData.role !== 'admin' && userData.role !== 'guard') return null;
-  if (userData.privacyAcceptedAt !== null) return null;
+  if (userData.privacyAcceptedAt !== null || accepted) return null;
 
   async function handleAccept() {
     setLoading(true);
@@ -20,6 +22,7 @@ export function PrivacyModal() {
       await updateDoc(doc(db, 'users', uid!), {
         privacyAcceptedAt: serverTimestamp(),
       });
+      setAccepted(true);
       toast.success('Privacy policy acknowledged');
     } catch (err) {
       console.error(err);
@@ -30,44 +33,47 @@ export function PrivacyModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900">
-        <div className="bg-blue-600 px-6 py-8 text-center text-white">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-white/20">
-            <ShieldCheck className="h-8 w-8 text-white" />
-          </div>
-          <h2 className="mt-4 text-2xl font-bold">Privacy & Compliance</h2>
-          <p className="mt-2 text-blue-100 text-sm">Action Required for Access</p>
-        </div>
-        
-        <div className="p-6">
-          <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">
+    <Modal
+      isOpen={true}
+      onClose={() => {}} // Cannot be closed
+      preventClose={true} // Removes close button, prevents clicking outside/esc to close
+      title="Privacy & Compliance"
+      description="Action Required for Access"
+      size="sm"
+    >
+      <div className="space-y-6">
+        <div className="rounded-xl bg-gray-50 dark:bg-gray-800/50 p-4 text-center">
+          <BrandMark size="sm" />
+          <p className="mt-4 text-sm text-[var(--color-text-secondary)] text-left">
             As a staff member of EARIST, you have access to sensitive visitor data including government IDs and webcam photos. By continuing, you agree to:
           </p>
-          <ul className="mb-6 space-y-2 text-sm text-gray-700 dark:text-gray-400">
-            <li className="flex gap-2">
-              <span className="text-blue-500">•</span>
-              Never download or export visitor IDs for personal use.
-            </li>
-            <li className="flex gap-2">
-              <span className="text-blue-500">•</span>
-              Only access records necessary for your immediate duties.
-            </li>
-            <li className="flex gap-2">
-              <span className="text-blue-500">•</span>
-              Understand that all actions and scans are permanently logged and audited.
-            </li>
-          </ul>
-
-          <button
-            onClick={handleAccept}
-            disabled={loading}
-            className="w-full rounded-md bg-blue-600 py-3 font-bold text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Processing...' : 'I Accept & Agree'}
-          </button>
         </div>
+
+        <ul className="space-y-3 text-sm text-[var(--color-text-primary)] font-medium">
+          <li className="flex gap-2">
+            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            Never download or export visitor IDs for personal use.
+          </li>
+          <li className="flex gap-2">
+            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            Only access records necessary for your immediate duties.
+          </li>
+          <li className="flex gap-2">
+            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            Understand that all actions and scans are permanently logged and audited.
+          </li>
+        </ul>
+
+        <Button
+          onClick={handleAccept}
+          disabled={loading}
+          loading={loading}
+          className="w-full"
+          size="lg"
+        >
+          {loading ? 'Accepting...' : 'I Accept & Agree'}
+        </Button>
       </div>
-    </div>
+    </Modal>
   );
 }

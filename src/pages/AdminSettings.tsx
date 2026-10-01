@@ -4,10 +4,15 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
 } from 'firebase/firestore';
 import { db, auth } from '@/lib/firebase';
-import { Save, Trash2, AlertTriangle } from 'lucide-react';
+import { Save, Trash2, AlertTriangle, Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button, Card, Input, ConfirmModal } from '@/components/ui';
 
 export function AdminSettings() {
   const [loading, setLoading] = useState(true);
@@ -21,6 +26,12 @@ export function AdminSettings() {
   });
 
   const [newReason, setNewReason] = useState('');
+  
+  // Modals state
+  const [showPeakModeConfirm, setShowPeakModeConfirm] = useState(false);
+  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
+  const [purgeEligibleCount, setPurgeEligibleCount] = useState<number | null>(null);
+  const [calculatingPurge, setCalculatingPurge] = useState(false);
 
   useEffect(() => {
     async function loadSettings() {
@@ -84,10 +95,30 @@ export function AdminSettings() {
   // ============================================================
   // PURGE IMAGES
   // ============================================================
-  async function handlePurge() {
-    const confirm = window.confirm(`This will permanently delete Cloudinary images for visitors older than ${settings.retentionDays} days. Continue?`);
-    if (!confirm) return;
+  async function handlePurgeClick() {
+    setCalculatingPurge(true);
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - settings.retentionDays);
+      const q = query(
+        collection(db, 'visitors'),
+        where('createdAt', '<', cutoffDate)
+      );
+      const snapshot = await getDocs(q);
+      
+      const unpurged = snapshot.docs.filter(d => !d.data().imagesPurgedAt);
+      
+      setPurgeEligibleCount(unpurged.length);
+      setShowPurgeConfirm(true);
+    } catch (err) {
+      console.error('Dry run failed', err);
+      toast.error('Could not calculate purge impact');
+    } finally {
+      setCalculatingPurge(false);
+    }
+  }
 
+  async function executePurge() {
     setPurging(true);
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -121,6 +152,7 @@ export function AdminSettings() {
       }
 
       toast.success(`Purge complete: ${totalPurged} visitors purged.`);
+      setShowPurgeConfirm(false);
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || 'Purge failed');
@@ -129,10 +161,20 @@ export function AdminSettings() {
     }
   }
 
+  function togglePeakMode() {
+    if (!settings.peakMode) {
+      setShowPeakModeConfirm(true);
+    } else {
+      // Instant off
+      setSettings({ ...settings, peakMode: false });
+      toast.success('Peak Mode disabled');
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-32 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
+        <div className="h-6 w-6 animate-spin rounded-full border-3 border-[var(--color-brand)] border-t-transparent" />
       </div>
     );
   }
@@ -141,135 +183,174 @@ export function AdminSettings() {
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             System Settings
           </h1>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          <p className="text-sm text-[var(--color-text-secondary)]">
             Configure policies, reasons, and data retention
           </p>
         </div>
-        <button
+        <Button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          icon={<Save className="h-4 w-4" />}
         >
-          <Save className="h-4 w-4" /> {saving ? 'Saving...' : 'Save Settings'}
-        </button>
+          {saving ? 'Saving...' : 'Save Settings'}
+        </Button>
       </div>
 
       <div className="grid gap-6">
         
         {/* Retention Policy */}
-        <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
-          <h2 className="mb-4 text-lg font-bold">Data Retention</h2>
+        <Card className="p-6">
+          <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Data Retention</h2>
           
-          <div className="mb-6">
-             <label className="mb-1 block text-sm font-medium">Visitor Data Retention (Days)</label>
-             <p className="mb-3 text-xs text-gray-500">
+          <div className="mb-8">
+             <label className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Visitor Data Retention (Days)</label>
+             <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
                How long visitor ID and photos are kept before they are eligible for deletion.
              </p>
-             <input
-               type="number"
-               min={1}
-               value={settings.retentionDays}
-               onChange={(e) => setSettings({ ...settings, retentionDays: parseInt(e.target.value) || 30 })}
-               className="w-full max-w-[200px] rounded-md border px-3 py-2 text-sm"
-             />
+             <div className="w-full max-w-[200px]">
+               <Input
+                 type="number"
+                 min={1}
+                 value={settings.retentionDays}
+                 onChange={(e) => setSettings({ ...settings, retentionDays: parseInt(e.target.value) || 30 })}
+               />
+             </div>
           </div>
 
-          <div className="rounded-md border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-900/10">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-5 w-5 text-red-600 dark:text-red-500 flex-shrink-0" />
+          <div className="rounded-lg border border-red-200 bg-red-50 p-5 dark:border-red-900/50 dark:bg-red-900/10">
+            <div className="flex items-start gap-4">
+              <AlertTriangle className="mt-0.5 h-6 w-6 text-red-600 dark:text-red-500 flex-shrink-0" />
               <div>
-                <h3 className="font-semibold text-red-800 dark:text-red-400">Purge Eligible Images</h3>
-                <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                <h3 className="font-semibold text-lg text-red-800 dark:text-red-400">Purge Eligible Images</h3>
+                <p className="mt-2 text-sm text-red-700 dark:text-red-300">
                   Permanently deletes Cloudinary images for visitors older than {settings.retentionDays} days. 
-                  This action cannot be undone. Firestore sets <code className="bg-red-100 dark:bg-red-800/50 px-1 rounded">imagesPurgedAt</code> only upon successful deletion.
+                  This action cannot be undone. Firestore sets <code className="bg-red-100 dark:bg-red-800/50 px-1.5 py-0.5 rounded font-mono text-xs">imagesPurgedAt</code> only upon successful deletion.
                 </p>
-                <button
-                  onClick={handlePurge}
-                  disabled={purging}
-                  className="mt-3 flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                <Button
+                  variant="destructive"
+                  onClick={handlePurgeClick}
+                  disabled={purging || calculatingPurge}
+                  loading={calculatingPurge}
+                  className="mt-4"
+                  icon={<Trash2 className="h-4 w-4" />}
                 >
-                  <Trash2 className="h-4 w-4" /> {purging ? 'Purging...' : 'Run Purge Now'}
-                </button>
+                  {calculatingPurge ? 'Calculating...' : purging ? 'Purging...' : 'Run Purge Now'}
+                </Button>
               </div>
             </div>
           </div>
-        </div>
+        </Card>
 
         {/* Peak Mode */}
-        <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+        <Card className="p-6">
           <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold">Peak Mode</h2>
-              <p className="mt-1 text-sm text-gray-500">
+            <div className="pr-8">
+              <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Peak Mode</h2>
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
                 When enabled, visitors are NOT required to upload a government ID to speed up the queue.
               </p>
             </div>
             <button
               type="button"
-              onClick={() => setSettings({ ...settings, peakMode: !settings.peakMode })}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                settings.peakMode ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-700'
+              onClick={togglePeakMode}
+              className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors ${
+                settings.peakMode ? 'bg-[var(--color-brand)]' : 'bg-gray-300 dark:bg-gray-700'
               }`}
             >
               <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
                   settings.peakMode ? 'translate-x-6' : 'translate-x-1'
                 }`}
               />
             </button>
           </div>
-        </div>
+        </Card>
 
         {/* Rejection Reasons */}
-        <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
-          <h2 className="mb-4 text-lg font-bold">Premade Rejection Reasons</h2>
+        <Card className="p-6">
+          <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Premade Rejection Reasons</h2>
           
-          <div className="mb-4 flex gap-2">
-            <input
-              type="text"
-              value={newReason}
-              onChange={(e) => setNewReason(e.target.value)}
-              placeholder="Add new reason..."
-              className="flex-1 rounded-md border px-3 py-2 text-sm"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  addReason();
-                }
-              }}
-            />
-            <button
-              type="button"
-              onClick={addReason}
-              className="rounded-md bg-gray-800 px-4 py-2 text-sm font-semibold text-white dark:bg-gray-100 dark:text-gray-900"
-            >
-              Add
-            </button>
-          </div>
-
-          <ul className="divide-y rounded-md border" style={{ borderColor: 'var(--color-border)' }}>
+          <ul className="divide-y rounded-lg border border-[var(--color-border)] overflow-hidden">
             {settings.rejectionReasons.map((reason) => (
-              <li key={reason} className="flex items-center justify-between p-3">
-                <span className="text-sm font-medium">{reason}</span>
+              <li key={reason} className="flex items-center justify-between p-4 hover:bg-[var(--color-canvas)] transition-colors">
+                <span className="text-sm font-medium text-[var(--color-text-primary)]">{reason}</span>
                 <button
                   type="button"
                   onClick={() => removeReason(reason)}
-                  className="rounded-full p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  className="rounded-md p-1.5 text-[var(--color-danger)] hover:bg-[var(--color-danger-light)] transition-colors"
+                  aria-label="Remove reason"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </li>
             ))}
             {settings.rejectionReasons.length === 0 && (
-              <li className="p-4 text-center text-sm text-gray-500">No reasons configured</li>
+              <li className="p-6 text-center text-sm text-[var(--color-text-muted)]">No reasons configured</li>
             )}
+            
+            <li className="flex gap-3 p-4 bg-gray-50 dark:bg-gray-800/20 border-t border-[var(--color-border)]">
+              <div className="flex-1">
+                <Input
+                  type="text"
+                  value={newReason}
+                  onChange={(e) => setNewReason(e.target.value)}
+                  placeholder="Add new reason..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addReason();
+                    }
+                  }}
+                />
+              </div>
+              <Button
+                onClick={addReason}
+                variant="secondary"
+                icon={<Plus className="h-4 w-4" />}
+              >
+                Add
+              </Button>
+            </li>
           </ul>
-        </div>
+        </Card>
 
       </div>
+      
+      <ConfirmModal
+        isOpen={showPurgeConfirm}
+        onClose={() => setShowPurgeConfirm(false)}
+        title="Purge Images?"
+        description={
+          <>
+            You are about to permanently delete Cloudinary images for <strong className="text-[var(--color-text-primary)]">{purgeEligibleCount}</strong> visitor{purgeEligibleCount === 1 ? '' : 's'} older than {settings.retentionDays} days.
+            This action cannot be undone.
+          </>
+        }
+        onConfirm={executePurge}
+        confirmText="Yes, purge images"
+        isDestructive
+        loading={purging}
+      />
+
+      <ConfirmModal
+        isOpen={showPeakModeConfirm}
+        onClose={() => setShowPeakModeConfirm(false)}
+        title="Enable Peak Mode?"
+        description={
+          <>
+            Are you sure you want to enable Peak Mode? Visitors will not be required to provide a government ID photo during registration. This reduces security but speeds up processing.
+          </>
+        }
+        onConfirm={() => {
+          setSettings({ ...settings, peakMode: true });
+          setShowPeakModeConfirm(false);
+          toast.success('Peak Mode enabled');
+        }}
+        confirmText="Enable Peak Mode"
+      />
     </div>
   );
 }

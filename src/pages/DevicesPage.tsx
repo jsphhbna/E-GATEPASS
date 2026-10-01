@@ -18,11 +18,12 @@ import { initializeApp } from 'firebase/app';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import type { Device, DeviceType, DeviceStatus } from '@/types';
-import { Tablet, Plus, X, Shield, ShieldOff } from 'lucide-react';
+import { Tablet, Plus, X, Lock, Unlock } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Button, Card, FormField, Input, StatusBadge, Modal, ConfirmModal } from '@/components/ui';
 
 // ============================================================
 // TYPES AND SCHEMA
@@ -66,6 +67,8 @@ export function DevicesPage() {
   const [devices, setDevices] = useState<DeviceWithId[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [revokingDevice, setRevokingDevice] = useState<DeviceWithId | null>(null);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   const {
     register,
@@ -145,44 +148,53 @@ export function DevicesPage() {
   // TOGGLE DEVICE STATUS
   // ============================================================
   async function toggleDeviceStatus(device: DeviceWithId) {
-    const newStatus: DeviceStatus =
-      device.status === 'active' ? 'revoked' : 'active';
-    try {
-      await updateDoc(doc(db, 'devices', device.id), {
-        status: newStatus,
-      });
-
-      await addDoc(collection(db, 'auditLogs'), {
-        actorUid: uid,
-        action: newStatus === 'revoked' ? 'device_revoked' : 'device_reactivated',
-        target: `devices/${device.id}`,
-        details: `${newStatus === 'revoked' ? 'Revoked' : 'Reactivated'} device "${device.name}"`,
-        timestamp: serverTimestamp(),
-      });
-
-      toast.success(
-        `Device "${device.name}" ${newStatus === 'revoked' ? 'revoked' : 'reactivated'}`
-      );
-    } catch (err) {
-      console.error('Toggle device error:', err);
-      toast.error('Failed to update device status.');
+    if (device.status === 'active') {
+      setRevokingDevice(device);
+    } else {
+      // Reactivate instantly
+      try {
+        await updateDoc(doc(db, 'devices', device.id), {
+          status: 'active',
+        });
+        await addDoc(collection(db, 'auditLogs'), {
+          actorUid: uid,
+          action: 'device_reactivated',
+          target: `devices/${device.id}`,
+          details: `Reactivated device "${device.name}"`,
+          timestamp: serverTimestamp(),
+        });
+        toast.success(`Device "${device.name}" reactivated`);
+      } catch (err) {
+        console.error('Reactivate device error:', err);
+        toast.error('Failed to reactivate device.');
+      }
     }
   }
 
-  // ============================================================
-  // STATUS BADGE STYLES
-  // ============================================================
-  function statusStyles(status: DeviceStatus) {
-    return status === 'active'
-      ? {
-          backgroundColor: 'var(--color-success-light)',
-          color: 'var(--color-success)',
-        }
-      : {
-          backgroundColor: 'var(--color-danger-light)',
-          color: 'var(--color-danger)',
-        };
+  async function handleRevoke(device: DeviceWithId) {
+    setIsRevoking(true);
+    try {
+      await updateDoc(doc(db, 'devices', device.id), {
+        status: 'revoked',
+      });
+      await addDoc(collection(db, 'auditLogs'), {
+        actorUid: uid,
+        action: 'device_revoked',
+        target: `devices/${device.id}`,
+        details: `Revoked device "${device.name}"`,
+        timestamp: serverTimestamp(),
+      });
+      toast.success(`Device "${device.name}" revoked`);
+      setRevokingDevice(null);
+    } catch (err) {
+      console.error('Revoke device error:', err);
+      toast.error('Failed to revoke device.');
+    } finally {
+      setIsRevoking(false);
+    }
   }
+
+
 
   function typeBadge(type: DeviceType) {
     const map: Record<DeviceType, string> = {
@@ -200,255 +212,172 @@ export function DevicesPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Devices
           </h1>
-          <p
-            className="mt-1 text-sm"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             Manage enrolled scanner tablets and kiosk devices
           </p>
         </div>
-        <button
-          type="button"
+        <Button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white"
-          style={{
-            backgroundColor: showForm ? 'var(--color-text-muted)' : 'var(--color-brand)',
-            borderRadius: 'var(--radius-sm)',
-          }}
+          variant={showForm ? 'secondary' : 'primary'}
+          icon={showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
         >
-          {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
           {showForm ? 'Cancel' : 'Register Device'}
-        </button>
+        </Button>
       </div>
 
       {/* Registration Form */}
-      {showForm && (
-        <div
-          className="mb-6 rounded-lg border p-5"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-            borderRadius: 'var(--radius-lg)',
-          }}
+      <Modal
+        isOpen={showForm}
+        onClose={() => {
+          setShowForm(false);
+          reset();
+        }}
+        title="Register New Device"
+        size="sm"
+        preventClose={creating}
+      >
+        <form
+          onSubmit={handleSubmit(onCreateDevice)}
+          className="grid gap-6 sm:grid-cols-2"
         >
-          <h2
-            className="mb-4 text-base font-semibold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            Register New Device
-          </h2>
-          <form
-            onSubmit={handleSubmit(onCreateDevice)}
-            className="grid gap-4 sm:grid-cols-2"
-          >
-            <div>
-              <label htmlFor="device-name" className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                Device Name
-              </label>
-              <input
-                id="device-name"
+          <div className="sm:col-span-2">
+            <FormField label="Device Name" error={errors.name?.message}>
+              <Input
                 {...register('name')}
                 placeholder="Main Gate Entry Tablet"
-                className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                style={{
-                  borderColor: errors.name ? 'var(--color-danger)' : 'var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-overlay)',
-                }}
+                error={!!errors.name}
               />
-              {errors.name && <p className="mt-1 text-xs" style={{ color: 'var(--color-danger)' }}>{errors.name.message}</p>}
-            </div>
+            </FormField>
+          </div>
 
-            <div>
-              <label htmlFor="device-type" className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                Type
-              </label>
-              <select
-                id="device-type"
-                {...register('type')}
-                className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                style={{
-                  borderColor: errors.type ? 'var(--color-danger)' : 'var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-overlay)',
-                }}
-              >
-                <option value="">Select type…</option>
-                <option value="entry">Entry Scanner</option>
-                <option value="exit">Exit Scanner</option>
-                <option value="kiosk">Kiosk</option>
-              </select>
-              {errors.type && <p className="mt-1 text-xs" style={{ color: 'var(--color-danger)' }}>{errors.type.message}</p>}
-            </div>
+          <FormField label="Type" error={errors.type?.message}>
+            <select
+              {...register('type')}
+              className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent"
+              style={{
+                borderColor: errors.type ? 'var(--color-danger)' : 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              <option value="">Select type…</option>
+              <option value="entry">Entry Scanner</option>
+              <option value="exit">Exit Scanner</option>
+              <option value="kiosk">Kiosk</option>
+            </select>
+          </FormField>
 
-            <div>
-              <label htmlFor="device-gate" className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                Gate / Location
-              </label>
-              <input
-                id="device-gate"
-                {...register('gate')}
-                placeholder="Main Gate"
-                className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                style={{
-                  borderColor: errors.gate ? 'var(--color-danger)' : 'var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-overlay)',
-                }}
-              />
-              {errors.gate && <p className="mt-1 text-xs" style={{ color: 'var(--color-danger)' }}>{errors.gate.message}</p>}
-            </div>
+          <FormField label="Gate / Location" error={errors.gate?.message}>
+            <Input
+              {...register('gate')}
+              placeholder="Main Gate"
+              error={!!errors.gate}
+            />
+          </FormField>
 
-            <div>
-              <label htmlFor="device-email" className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                Login Email (for the device)
-              </label>
-              <input
-                id="device-email"
+          <div className="sm:col-span-2">
+            <FormField label="Login Email (for the device)" error={errors.email?.message}>
+              <Input
                 type="email"
                 {...register('email')}
                 placeholder="maingate-entry@earist-devices.local"
-                className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                style={{
-                  borderColor: errors.email ? 'var(--color-danger)' : 'var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-overlay)',
-                }}
+                error={!!errors.email}
               />
-              {errors.email && <p className="mt-1 text-xs" style={{ color: 'var(--color-danger)' }}>{errors.email.message}</p>}
-            </div>
+            </FormField>
+          </div>
 
-            <div className="sm:col-span-2">
-              <label htmlFor="device-password" className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-                Login Password (for the device)
-              </label>
-              <input
-                id="device-password"
+          <div className="sm:col-span-2">
+            <FormField label="Login Password (for the device)" error={errors.password?.message}>
+              <Input
                 type="password"
                 {...register('password')}
                 placeholder="••••••••"
-                className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                style={{
-                  borderColor: errors.password ? 'var(--color-danger)' : 'var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--color-overlay)',
-                }}
+                error={!!errors.password}
               />
-              {errors.password && <p className="mt-1 text-xs" style={{ color: 'var(--color-danger)' }}>{errors.password.message}</p>}
-            </div>
+            </FormField>
+          </div>
 
-            <div className="sm:col-span-2">
-              <button
-                type="submit"
-                disabled={creating}
-                className="flex items-center gap-2 rounded-md px-6 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                style={{
-                  backgroundColor: 'var(--color-brand)',
-                  borderRadius: 'var(--radius-sm)',
-                }}
-              >
-                {creating ? 'Registering…' : 'Register Device'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+          <div className="sm:col-span-2">
+            <Button
+              type="submit"
+              disabled={creating}
+              loading={creating}
+              className="w-full"
+            >
+              {creating ? 'Registering...' : 'Register Device'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Device List */}
       {devices.length === 0 ? (
-        <div
-          className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-16"
-          style={{
-            borderColor: 'var(--color-border)',
-            borderRadius: 'var(--radius-lg)',
-          }}
-        >
-          <Tablet className="mb-3 h-10 w-10" style={{ color: 'var(--color-text-muted)' }} />
-          <p className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+        <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border)] py-16">
+          <Tablet className="mb-3 h-10 w-10 text-[var(--color-text-muted)]" />
+          <p className="text-sm font-medium text-[var(--color-text-secondary)]">
             No devices registered yet
           </p>
-          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
             Register a scanner tablet or kiosk to get started
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {devices.map((device) => (
-            <div
-              key={device.id}
-              className="rounded-lg border p-4"
-              style={{
-                backgroundColor: 'var(--color-surface)',
-                borderColor: 'var(--color-border)',
-                borderRadius: 'var(--radius-md)',
-              }}
-            >
-              <div className="mb-3 flex items-start justify-between">
-                <div>
-                  <h3
-                    className="text-sm font-semibold"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    {device.name}
-                  </h3>
-                  <p
-                    className="text-xs"
-                    style={{ color: 'var(--color-text-muted)' }}
-                  >
-                    {device.gate}
-                  </p>
+            <Card key={device.id} className="p-5 flex flex-col justify-between">
+              <div>
+                <div className="mb-4 flex items-start justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-[var(--color-text-primary)]">
+                      {device.name}
+                    </h3>
+                    <p className="text-xs font-medium text-[var(--color-text-secondary)] mt-0.5">
+                      {device.gate}
+                    </p>
+                  </div>
+                  <StatusBadge 
+                    status={device.status === 'active' ? 'issued' : 'rejected'} 
+                    label={device.status} 
+                  />
                 </div>
-                <span
-                  className="rounded-full px-2 py-0.5 text-xs font-semibold"
-                  style={{
-                    ...statusStyles(device.status),
-                    borderRadius: 'var(--radius-full)',
-                  }}
-                >
-                  {device.status}
-                </span>
+
+                <p className="mb-6 text-sm font-medium text-[var(--color-text-secondary)]">
+                  {typeBadge(device.type)}
+                </p>
               </div>
 
-              <p
-                className="mb-3 text-xs"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {typeBadge(device.type)}
-              </p>
-
-              <button
-                type="button"
+              <Button
+                variant={device.status === 'active' ? 'destructive' : 'primary'}
                 onClick={() => toggleDeviceStatus(device)}
-                className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  color:
-                    device.status === 'active'
-                      ? 'var(--color-danger)'
-                      : 'var(--color-success)',
-                  borderRadius: 'var(--radius-sm)',
-                }}
+                className="w-full"
+                icon={device.status === 'active' ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
               >
-                {device.status === 'active' ? (
-                  <>
-                    <ShieldOff className="h-3 w-3" /> Revoke
-                  </>
-                ) : (
-                  <>
-                    <Shield className="h-3 w-3" /> Reactivate
-                  </>
-                )}
-              </button>
-            </div>
+                {device.status === 'active' ? 'Revoke Device' : 'Reactivate Device'}
+              </Button>
+            </Card>
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!revokingDevice}
+        onClose={() => setRevokingDevice(null)}
+        title="Revoke Device?"
+        description={
+          <>
+            Are you sure you want to revoke <strong className="text-[var(--color-text-primary)]">{revokingDevice?.name}</strong>?
+            It will immediately lose access to the system. You can reactivate it later.
+          </>
+        }
+        onConfirm={() => {
+          if (revokingDevice) handleRevoke(revokingDevice);
+        }}
+        confirmText="Revoke"
+        isDestructive
+        loading={isRevoking}
+      />
     </div>
   );
 }

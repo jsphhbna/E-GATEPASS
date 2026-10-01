@@ -11,7 +11,8 @@ import {
 import { db } from '@/lib/firebase';
 import { FirebaseApp, initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { Plus, X } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import { Button, FormField, Input, StatusBadge, DataTable, DataTableHead, DataTableRow, DataTableCell, Modal, ConfirmModal } from '@/components/ui';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
@@ -53,6 +54,8 @@ export function AdminUsers() {
   const [users, setUsers] = useState<AppUserWithId[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [deactivatingUser, setDeactivatingUser] = useState<AppUserWithId | null>(null);
+  const [isDeactivating, setIsDeactivating] = useState(false);
 
   const {
     register,
@@ -103,6 +106,15 @@ export function AdminUsers() {
 
       const uid = userCredential.user.uid;
 
+      let emailSent = false;
+      try {
+        const { sendEmailVerification } = await import('firebase/auth');
+        await sendEmailVerification(userCredential.user);
+        emailSent = true;
+      } catch (emailErr: any) {
+        console.error('Email verification error:', emailErr);
+      }
+
       // Create user doc in Firestore
       await setDoc(doc(db, 'users', uid), {
         name: data.name,
@@ -110,10 +122,15 @@ export function AdminUsers() {
         role: data.role,
         active: true,
         privacyAcceptedAt: null,
+        mustChangePassword: data.role === 'guard',
         createdAt: serverTimestamp(),
       });
 
-      toast.success(`${data.role} account created successfully!`);
+      if (emailSent) {
+        toast.success(`${data.role} account created. Verification email sent!`);
+      } else {
+        toast.warning(`${data.role} account created, but failed to send verification email.`);
+      }
       setIsCreating(false);
       reset();
       loadUsers();
@@ -123,18 +140,34 @@ export function AdminUsers() {
     }
   }
 
-  async function toggleStatus(uid: string, currentStatus: boolean) {
+  async function handleDeactivate(user: AppUserWithId) {
+    setIsDeactivating(true);
     try {
-      await updateDoc(doc(db, 'users', uid), {
-        active: !currentStatus,
-      });
-      toast.success(
-        `User ${!currentStatus ? 'activated' : 'deactivated'} successfully`
-      );
+      await updateDoc(doc(db, 'users', user.uid), { active: false });
+      toast.success('User deactivated successfully');
+      setDeactivatingUser(null);
       loadUsers();
     } catch (err) {
       console.error(err);
-      toast.error('Failed to update user status');
+      toast.error('Failed to deactivate user');
+    } finally {
+      setIsDeactivating(false);
+    }
+  }
+
+  async function toggleStatus(user: AppUserWithId) {
+    if (user.active) {
+      setDeactivatingUser(user);
+    } else {
+      // Reactivate instantly
+      try {
+        await updateDoc(doc(db, 'users', user.uid), { active: true });
+        toast.success('User activated successfully');
+        loadUsers();
+      } catch (err) {
+        console.error(err);
+        toast.error('Failed to update user status');
+      }
     }
   }
 
@@ -142,124 +175,132 @@ export function AdminUsers() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             User Management
           </h1>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          <p className="text-sm text-[var(--color-text-secondary)]">
             Manage guard and admin accounts
           </p>
         </div>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
-        >
-          <Plus className="h-4 w-4" /> Add User
-        </button>
+        <Button onClick={() => setIsCreating(true)} icon={<Plus className="h-4 w-4" />}>
+          Add User
+        </Button>
       </div>
 
-      {isCreating && (
-        <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold">Create New Account</h2>
-            <button onClick={() => setIsCreating(false)} className="rounded-full p-1 hover:bg-gray-100 dark:hover:bg-gray-800">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-w-md">
-            <div>
-              <label className="mb-1 block text-sm font-medium">Name</label>
-              <input type="text" {...register('name')} className="w-full rounded-md border px-3 py-2 text-sm" />
-              {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name.message}</p>}
-            </div>
+      <Modal 
+        isOpen={isCreating} 
+        onClose={() => {
+          setIsCreating(false);
+          reset();
+        }}
+        title="Create New Account"
+        preventClose={isSubmitting}
+        size="sm"
+      >
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <FormField label="Name" error={errors.name?.message}>
+            <Input type="text" {...register('name')} error={!!errors.name} />
+          </FormField>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium">Email</label>
-              <input type="email" {...register('email')} className="w-full rounded-md border px-3 py-2 text-sm" />
-              {errors.email && <p className="mt-1 text-xs text-red-500">{errors.email.message}</p>}
-            </div>
+          <FormField label="Email" error={errors.email?.message}>
+            <Input type="email" {...register('email')} error={!!errors.email} />
+          </FormField>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium">Password</label>
-              <input type="password" {...register('password')} className="w-full rounded-md border px-3 py-2 text-sm" />
-              {errors.password && <p className="mt-1 text-xs text-red-500">{errors.password.message}</p>}
-            </div>
+          <FormField label="Password" error={errors.password?.message}>
+            <Input type="password" {...register('password')} error={!!errors.password} />
+          </FormField>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium">Role</label>
-              <select {...register('role')} className="w-full rounded-md border px-3 py-2 text-sm">
-                <option value="guard">Guard</option>
-                <option value="admin">Admin</option>
-              </select>
-              {errors.role && <p className="mt-1 text-xs text-red-500">{errors.role.message}</p>}
-            </div>
+          <FormField label="Role" error={errors.role?.message}>
+            <select 
+              {...register('role')} 
+              className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent"
+              style={{
+                borderColor: errors.role ? 'var(--color-danger)' : 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              <option value="guard">Guard</option>
+              <option value="admin">Admin</option>
+            </select>
+          </FormField>
 
-            <button type="submit" disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50">
-              {isSubmitting ? 'Creating...' : 'Create Account'}
-            </button>
-          </form>
-        </div>
-      )}
+          <Button type="submit" disabled={isSubmitting} className="w-full" loading={isSubmitting}>
+            {isSubmitting ? 'Creating...' : 'Create Account'}
+          </Button>
+        </form>
+      </Modal>
 
       {loading ? (
         <div className="flex h-32 items-center justify-center">
-          <div className="h-6 w-6 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-brand)]" />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
-          <table className="w-full text-left text-sm">
-            <thead className="bg-gray-50 uppercase dark:bg-gray-900/50">
+        <DataTable>
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableCell isHeader>Name</DataTableCell>
+              <DataTableCell isHeader>Email</DataTableCell>
+              <DataTableCell isHeader>Role</DataTableCell>
+              <DataTableCell isHeader>Status</DataTableCell>
+              <DataTableCell isHeader className="text-right">Actions</DataTableCell>
+            </DataTableRow>
+          </DataTableHead>
+          <tbody>
+            {users.map((user) => (
+              <DataTableRow key={user.uid}>
+                <DataTableCell className="font-semibold">{user.name}</DataTableCell>
+                <DataTableCell className="text-[var(--color-text-secondary)]">{user.email}</DataTableCell>
+                <DataTableCell>
+                  <StatusBadge 
+                    status={user.role === 'admin' ? 'issued' : 'pending'} 
+                    label={user.role} 
+                  />
+                </DataTableCell>
+                <DataTableCell>
+                  <StatusBadge 
+                    status={user.active ? 'inside' : 'rejected'} 
+                    label={user.active ? 'Active' : 'Deactivated'} 
+                  />
+                </DataTableCell>
+                <DataTableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    onClick={() => toggleStatus(user)}
+                    className="text-[var(--color-brand)] hover:bg-[var(--color-brand-light)]"
+                  >
+                    {user.active ? 'Deactivate' : 'Activate'}
+                  </Button>
+                </DataTableCell>
+              </DataTableRow>
+            ))}
+            {users.length === 0 && (
               <tr>
-                <th className="px-4 py-3 font-semibold">Name</th>
-                <th className="px-4 py-3 font-semibold">Email</th>
-                <th className="px-4 py-3 font-semibold">Role</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                <td colSpan={5} className="py-8 text-center text-[var(--color-text-muted)]">
+                  No users found.
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
-              {users.map((user) => (
-                <tr key={user.uid} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
-                  <td className="px-4 py-3 font-medium">{user.name}</td>
-                  <td className="px-4 py-3 text-gray-500">{user.email}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {user.role}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      user.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}>
-                      {user.active ? 'Active' : 'Deactivated'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => toggleStatus(user.uid, user.active)}
-                      className="text-xs font-medium text-blue-600 hover:underline"
-                    >
-                      {user.active ? 'Deactivate' : 'Activate'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {users.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-8 text-center text-gray-500">
-                    No users found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            )}
+          </tbody>
+        </DataTable>
       )}
+
+      <ConfirmModal
+        isOpen={!!deactivatingUser}
+        onClose={() => setDeactivatingUser(null)}
+        title="Deactivate User?"
+        description={
+          <>
+            Are you sure you want to deactivate <strong className="text-[var(--color-text-primary)]">{deactivatingUser?.name}</strong>?
+            They will lose access immediately. You can reactivate them later.
+          </>
+        }
+        onConfirm={() => {
+          if (deactivatingUser) handleDeactivate(deactivatingUser);
+        }}
+        confirmText="Deactivate"
+        isDestructive
+        loading={isDeactivating}
+      />
     </div>
   );
 }

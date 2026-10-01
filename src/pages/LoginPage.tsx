@@ -1,17 +1,32 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { signInWithEmailAndPassword, sendEmailVerification, signOut } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
-import { Shield } from 'lucide-react';
+import { Card, Button, Input, FormField } from '@/components/ui';
+import { BrandMark } from '@/components/BrandMark';
+import { Eye, EyeOff } from 'lucide-react';
+import { toast } from 'sonner';
 
 export function LoginPage() {
   const navigate = useNavigate();
   const { status, role } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState('');
+  const [unverifiedPassword, setUnverifiedPassword] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown > 0) {
+      const timer = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendCooldown]);
 
   // Redirect if already authenticated
   if (status === 'authenticated' && role) {
@@ -26,13 +41,51 @@ export function LoginPage() {
     navigate(target, { replace: true });
   }
 
+  async function handleResendVerification() {
+    if (resendCooldown > 0 || !unverifiedEmail || !unverifiedPassword) return;
+    setLoading(true);
+    try {
+      const userCred = await signInWithEmailAndPassword(auth, unverifiedEmail, unverifiedPassword);
+      await sendEmailVerification(userCred.user);
+      await signOut(auth);
+      toast.success('Verification email resent. Please check your inbox.');
+      setResendCooldown(60);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to resend verification email.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setUnverifiedEmail('');
+    setUnverifiedPassword('');
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCred = await signInWithEmailAndPassword(auth, email, password);
+      await userCred.user.reload();
+      
+      const userDoc = await getDoc(doc(db, 'users', userCred.user.uid));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        if ((userData.role === 'admin' || userData.role === 'guard') && userData.active) {
+          if (!auth.currentUser?.emailVerified) {
+            await signOut(auth);
+            setUnverifiedEmail(email);
+            setUnverifiedPassword(password);
+            const msg = 'Account not verified. Please verify your email first. Check your inbox, spam, or trash folder for the verification email.';
+            setError(msg);
+            toast.error(msg, { id: 'unverified-toast' });
+            setLoading(false);
+            return;
+          }
+          await auth.currentUser?.getIdToken(true);
+        }
+      }
+      
       // onAuthStateChanged in AuthProvider handles role resolution and redirect
     } catch {
       setError('Invalid email or password. Please try again.');
@@ -42,118 +95,85 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4">
-      <div
-        className="w-full max-w-sm rounded-xl p-8"
-        style={{
-          backgroundColor: 'var(--color-surface)',
-          boxShadow: 'var(--shadow-md)',
-          borderRadius: 'var(--radius-lg)',
-        }}
-      >
-        <div className="mb-6 text-center">
-          <div
-            className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: 'var(--color-brand-light)' }}
-          >
-            <Shield
-              className="h-6 w-6"
-              style={{ color: 'var(--color-brand)' }}
-              aria-hidden="true"
-            />
-          </div>
-          <h1
-            className="text-xl font-bold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
+    <main className="flex min-h-dvh items-center justify-center px-4 bg-[var(--color-canvas)]">
+      <Card className="w-full max-w-sm p-8">
+        <div className="mb-8 text-center">
+          <BrandMark size="lg" className="mx-auto mb-4" />
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Sign In
           </h1>
-          <p
-            className="mt-1 text-sm"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             EARIST E-GatePass Staff Portal
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label
-              htmlFor="login-email"
-              className="mb-1 block text-sm font-medium"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              Email
-            </label>
-            <input
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <FormField label="Email">
+            <Input
               id="login-email"
               type="email"
               required
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-              style={{
-                borderColor: 'var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--color-overlay)',
-              }}
               placeholder="guard@earist.edu.ph"
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label
-              htmlFor="login-password"
-              className="mb-1 block text-sm font-medium"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              Password
-            </label>
-            <input
-              id="login-password"
-              type="password"
-              required
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-              style={{
-                borderColor: 'var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--color-overlay)',
-              }}
-              placeholder="••••••••"
-            />
-          </div>
+          <FormField label="Password">
+            <div className="relative">
+              <Input
+                id="login-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-5 w-5" />
+                ) : (
+                  <Eye className="h-5 w-5" />
+                )}
+              </button>
+            </div>
+          </FormField>
 
           {error && (
-            <p
-              role="alert"
-              className="rounded-md px-3 py-2 text-sm font-medium"
-              style={{
-                backgroundColor: 'var(--color-danger-light)',
-                color: 'var(--color-danger)',
-                borderRadius: 'var(--radius-xs)',
-              }}
-            >
-              {error}
-            </p>
+            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-600 border border-red-200 flex flex-col gap-3">
+              <p role="alert">{error}</p>
+              {unverifiedEmail && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleResendVerification}
+                  disabled={resendCooldown > 0 || loading}
+                  className="w-full text-red-700 border-red-300 hover:bg-red-100"
+                >
+                  {resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend Verification Email'}
+                </Button>
+              )}
+            </div>
           )}
 
-          <button
+          <Button
             type="submit"
             disabled={loading}
-            className="w-full rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-            style={{
-              backgroundColor: 'var(--color-brand)',
-              borderRadius: 'var(--radius-sm)',
-            }}
+            className="w-full"
+            size="lg"
           >
-            {loading ? 'Signing in…' : 'Sign In'}
-          </button>
+            {loading ? 'Signing in...' : 'Sign In'}
+          </Button>
         </form>
-      </div>
+      </Card>
     </main>
   );
 }

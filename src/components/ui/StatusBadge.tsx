@@ -2,10 +2,11 @@ export type GatePassStatus = 'issued' | 'pending' | 'inside' | 'exited' | 'expir
 
 interface StatusBadgeProps {
   status: GatePassStatus | string;
+  label?: string;
   className?: string;
 }
 
-export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
+export function StatusBadge({ status, label, className = '' }: StatusBadgeProps) {
   let badgeClasses = '';
   const baseClasses = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize whitespace-nowrap';
 
@@ -34,7 +35,7 @@ export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
 
   return (
     <span className={`${baseClasses} ${badgeClasses} ${className}`.trim()}>
-      {status}
+      {label || status}
     </span>
   );
 }

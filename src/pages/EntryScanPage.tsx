@@ -13,7 +13,8 @@ import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
-import { Shield, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { BrandMark } from '@/components/BrandMark';
 import type { GatePass, Device } from '@/types';
 
 type ScanStatus = 'ready' | 'processing' | 'success' | 'error';
@@ -214,7 +215,7 @@ export function EntryScanPage() {
   const statusConfig = {
     ready: {
       bg: 'var(--color-brand)',
-      icon: <Shield className="h-8 w-8 text-white" />,
+      icon: <BrandMark size="sm" />,
     },
     processing: {
       bg: 'var(--color-warning)',

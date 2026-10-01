@@ -142,6 +142,6 @@ export const LANDING_CONTENT = {
     officialName: "EULOGIO \"AMANG\" RODRIGUEZ INSTITUTE OF SCIENCE AND TECHNOLOGY",
     contact: "Nagtahan St, Sampaloc, Manila, 1008 Metro Manila · earistofficial1945@gmail.com · (028) 243-9467",
     websiteLink: { text: "Visit the official EARIST website", href: "https://earist.edu.ph" },
-    smallPrint: `E-GatePass is a capstone project. ${PLACEHOLDERS.creditLine} · © 2026 EARIST`
+    smallPrint: "E-GatePass Capstone Project · Mary Joy Cagande · Joseph Habana · Mon Gerald Lanon · Jeferson Tambis · Adviser: Dhani San Jose · © 2026 EARIST"
   }
 };

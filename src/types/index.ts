@@ -88,6 +88,7 @@ export interface AppUser {
   role: UserRole;
   active: boolean;
   privacyAcceptedAt: Timestamp | null;
+  mustChangePassword?: boolean;
   createdAt: Timestamp;
 }
 
@@ -125,7 +126,7 @@ export interface AppSettings {
 export type AuthRole = UserRole | DeviceType | 'visitor' | null;
 
 export interface AuthState {
-  status: 'loading' | 'authenticated' | 'unauthenticated';
+  status: 'loading' | 'authenticated' | 'unauthenticated' | 'requires_password_change';
   uid: string | null;
   role: AuthRole;
   userData: AppUser | Device | null;

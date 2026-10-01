@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { ForcePasswordChange } from '@/components/ForcePasswordChange';
 import type { AuthRole } from '@/types';
 
 interface ProtectedRouteProps {
@@ -36,6 +37,10 @@ export function ProtectedRoute({
 
   if (status === 'unauthenticated') {
     return <Navigate to={loginPath} replace />;
+  }
+
+  if (status === 'requires_password_change') {
+    return <ForcePasswordChange />;
   }
 
   if (!allowedRoles.includes(role)) {

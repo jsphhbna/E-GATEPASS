@@ -8,8 +8,9 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { Download, Search, Printer } from 'lucide-react';
+import { Download, Printer } from 'lucide-react';
 import { format } from 'date-fns';
+import { Card, Input, Button, DataTable, DataTableHead, DataTableRow, DataTableCell, StatusBadge } from '@/components/ui';
 import type { GatePass } from '@/types';
 
 interface GatePassWithId extends GatePass {
@@ -82,7 +83,7 @@ export function AdminRecords() {
 
   const filteredPasses = passes.filter((p) => {
     if (statusFilter && p.status !== statusFilter) return false;
-    if (search && !p.visitorName.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !(p.visitorName ?? '').toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
@@ -118,27 +119,28 @@ export function AdminRecords() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Visitor Records
           </h1>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          <p className="text-sm text-[var(--color-text-secondary)] mt-1">
             View and export gate pass history
           </p>
         </div>
         <div className="flex gap-2 print:hidden">
-          <button
+          <Button
             onClick={() => window.print()}
-            className="flex items-center gap-2 rounded-md bg-gray-800 px-4 py-2 text-sm font-semibold text-white dark:bg-gray-200 dark:text-gray-900"
+            variant="secondary"
+            icon={<Printer className="h-4 w-4" />}
           >
-            <Printer className="h-4 w-4" /> Print
-          </button>
-          <button
+            Print
+          </Button>
+          <Button
             onClick={exportCSV}
             disabled={filteredPasses.length === 0}
-            className="flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            icon={<Download className="h-4 w-4" />}
           >
-            <Download className="h-4 w-4" /> Export CSV
-          </button>
+            Export CSV
+          </Button>
         </div>
       </div>
 
@@ -151,37 +153,36 @@ export function AdminRecords() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-4 rounded-lg border p-4 print:hidden" style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+      <Card className="flex flex-wrap gap-4 p-5 print:hidden">
         <div className="flex-1 min-w-[200px]">
-          <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>Search Name</label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search visitors..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-md border py-2 pl-9 pr-3 text-sm"
-            />
-          </div>
+          <label className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Search Name</label>
+          <Input
+            type="text"
+            placeholder="Search visitors..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
         
         <div className="w-48">
-          <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>Date</label>
-          <input
+          <label className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Date</label>
+          <Input
             type="date"
             value={dateFilter}
             onChange={(e) => setDateFilter(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm"
           />
         </div>
 
         <div className="w-48">
-          <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>Status</label>
+          <label className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Status</label>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm"
+            className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent h-[38px]"
+            style={{
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text-primary)',
+            }}
           >
             <option value="">All Statuses</option>
             <option value="issued">Issued</option>
@@ -192,65 +193,63 @@ export function AdminRecords() {
             <option value="expired">Expired</option>
           </select>
         </div>
-      </div>
+      </Card>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border print:border-none" style={{ borderColor: 'var(--color-border)' }}>
-        <table className="w-full text-left text-sm print:text-black">
-          <thead className="bg-gray-50 uppercase dark:bg-gray-900/50 print:bg-transparent print:border-b-2 print:border-black">
-            <tr>
-              <th className="px-4 py-3 font-semibold print:px-2">Name / Purpose</th>
-              <th className="px-4 py-3 font-semibold print:px-2">Status</th>
-              <th className="px-4 py-3 font-semibold print:px-2">Issued</th>
-              <th className="px-4 py-3 font-semibold print:px-2">Time In</th>
-              <th className="px-4 py-3 font-semibold print:px-2">Time Out</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y print:divide-black/20" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="print:border-none print:shadow-none print:m-0 print:p-0">
+        <DataTable>
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableCell isHeader className="print:px-2">Name / Purpose</DataTableCell>
+              <DataTableCell isHeader className="print:px-2">Status</DataTableCell>
+              <DataTableCell isHeader className="print:px-2">Issued</DataTableCell>
+              <DataTableCell isHeader className="print:px-2">Time In</DataTableCell>
+              <DataTableCell isHeader className="print:px-2">Time Out</DataTableCell>
+            </DataTableRow>
+          </DataTableHead>
+          <tbody className="divide-y border-[var(--color-border)] print:divide-black/20">
             {loading ? (
               <tr className="print:hidden">
                 <td colSpan={5} className="py-12 text-center">
-                  <div className="mx-auto h-6 w-6 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
+                  <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-brand)]" />
                 </td>
               </tr>
             ) : filteredPasses.length === 0 ? (
               <tr>
-                <td colSpan={5} className="py-8 text-center text-gray-500">
+                <td colSpan={5} className="py-8 text-center text-[var(--color-text-muted)]">
                   No records found for the selected filters.
                 </td>
               </tr>
             ) : (
               filteredPasses.map((pass) => (
-                <tr key={pass.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50 print:hover:bg-transparent">
-                  <td className="px-4 py-3 print:px-2">
-                    <p className="font-medium">{pass.visitorName}</p>
-                    <p className="text-xs text-gray-500 line-clamp-1">{pass.purpose}</p>
-                  </td>
-                  <td className="px-4 py-3 print:px-2">
+                <DataTableRow key={pass.id} className="print:hover:bg-transparent">
+                  <DataTableCell className="print:px-2">
+                    <p className="font-bold text-[var(--color-text-primary)]">{pass.visitorName}</p>
+                    <p className="text-sm font-medium text-[var(--color-text-secondary)] line-clamp-1">{pass.purpose}</p>
+                  </DataTableCell>
+                  <DataTableCell className="print:px-2">
                     {pass.status === 'inside' && pass.validUntil && pass.validUntil.toMillis() < Date.now() ? (
                       <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800 dark:bg-red-900/50 dark:text-red-300">
                         MISSING EXIT
                       </span>
                     ) : (
-                      <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-800 dark:bg-gray-800 dark:text-gray-300 uppercase">
-                        {pass.status}
-                      </span>
+                      <StatusBadge status={pass.status} />
                     )}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap print:px-2">
+                  </DataTableCell>
+                  <DataTableCell className="whitespace-nowrap text-[var(--color-text-secondary)] print:px-2">
                     {pass.issuedAt ? format(pass.issuedAt.toMillis(), 'MMM d, h:mm a') : '—'}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap print:px-2">
+                  </DataTableCell>
+                  <DataTableCell className="whitespace-nowrap text-[var(--color-text-secondary)] print:px-2">
                     {pass.timeIn ? format(pass.timeIn.toMillis(), 'h:mm a') : '—'}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap print:px-2">
+                  </DataTableCell>
+                  <DataTableCell className="whitespace-nowrap text-[var(--color-text-secondary)] print:px-2">
                     {pass.timeOut ? format(pass.timeOut.toMillis(), 'h:mm a') : '—'}
-                  </td>
-                </tr>
+                  </DataTableCell>
+                </DataTableRow>
               ))
             )}
           </tbody>
-        </table>
+        </DataTable>
       </div>
     </div>
   );

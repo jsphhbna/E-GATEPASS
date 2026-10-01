@@ -15,22 +15,41 @@ import {
   Download,
   ArrowLeft,
   ArrowRight,
-  Shield,
   AlertCircle,
   X,
   RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, parse, startOfDay, set as setDate } from 'date-fns';
+import { Link } from 'react-router-dom';
+import { Button, Card, Input, Textarea, FormField, Stepper, PageShell } from '@/components/ui';
+import { BrandMark } from '@/components/BrandMark';
 
 // ============================================================
 // FORM SCHEMA (Zod)
 // ============================================================
+const nameRegex = /^[\p{L}\s\-'.]+$/u;
+
 const getPassSchema = z.object({
-  fullName: z
+  firstName: z
     .string()
-    .min(2, 'Full name must be at least 2 characters')
-    .max(100, 'Full name is too long'),
+    .trim()
+    .min(2, 'First name must be at least 2 characters')
+    .max(50, 'First name is too long')
+    .regex(nameRegex, 'Invalid characters in name'),
+  middleName: z
+    .string()
+    .trim()
+    .max(50, 'Middle name is too long')
+    .regex(nameRegex, 'Invalid characters in name')
+    .optional()
+    .or(z.literal('')),
+  lastName: z
+    .string()
+    .trim()
+    .min(2, 'Last name must be at least 2 characters')
+    .max(50, 'Last name is too long')
+    .regex(nameRegex, 'Invalid characters in name'),
   contactNumber: z
     .string()
     .min(7, 'Contact number must be at least 7 digits')
@@ -171,8 +190,16 @@ export function GetPassPage() {
       const visitorRef = doc(collection(db, 'visitors'));
       const visitorId = visitorRef.id;
 
+      const composedFullName = [formData.firstName, formData.middleName, formData.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ');
+
       await setDoc(visitorRef, {
-        fullName: formData.fullName,
+        firstName: formData.firstName,
+        middleName: formData.middleName || '',
+        lastName: formData.lastName,
+        fullName: composedFullName,
         contactNumber: formData.contactNumber,
         purpose: formData.purpose,
         visitDate: formData.visitDate,
@@ -197,7 +224,7 @@ export function GetPassPage() {
 
       await setDoc(gatePassRef, {
         visitorId,
-        visitorName: formData.fullName,
+        visitorName: composedFullName,
         purpose: formData.purpose,
         photoPublicId,
         idImagePublicId: idImagePublicId || null,
@@ -269,250 +296,110 @@ export function GetPassPage() {
   // ============================================================
   // RENDER
   // ============================================================
+  const steps = [
+    { id: 'form', title: 'Details' },
+    { id: 'photo', title: 'Photo' },
+    ...(!isPeakMode ? [{ id: 'id', title: 'Upload ID' }] : []),
+    { id: 'review', title: 'Review' },
+  ];
+
+  const currentStepIndex = 
+    step === 'done' || step === 'generating' ? steps.length :
+    steps.findIndex(s => s.id === step);
+
   return (
-    <main
-      id="main-content"
-      className="flex min-h-dvh flex-col items-center justify-start px-4 py-8"
-      style={{ backgroundColor: 'var(--color-canvas)' }}
+    <PageShell
+      headerContent={
+        <Link to="/" className="text-sm font-semibold text-[var(--color-earist-maroon)] hover:underline">
+          Back to home
+        </Link>
+      }
     >
-      <div className="w-full max-w-lg">
+      <div className="mx-auto w-full max-w-lg">
         {/* Header */}
-        <div className="mb-6 text-center">
-          <div
-            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl"
-            style={{ backgroundColor: 'var(--color-brand-light)' }}
-          >
-            <Shield
-              className="h-6 w-6"
-              style={{ color: 'var(--color-brand)' }}
-              aria-hidden="true"
-            />
-          </div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
+        <div className="mb-8 text-center">
+          <BrandMark size="lg" className="mx-auto mb-4" />
+          <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">
             Get Gate Pass
           </h1>
-          <p
-            className="mt-1 text-sm"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
+          <p className="mt-2 text-[var(--color-text-secondary)]">
             Fill in your details to generate a QR-coded gate pass
           </p>
         </div>
 
         {/* Step Indicator */}
         {step !== 'done' && step !== 'generating' && (
-          <div className="mb-6 flex items-center justify-center gap-2">
-            {(isPeakMode ? (['form', 'photo', 'review'] as const) : (['form', 'photo', 'id', 'review'] as const)).map((s, i, arr) => (
-              <div key={s} className="flex items-center gap-2">
-                <div
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
-                  style={{
-                    backgroundColor:
-                      step === s
-                        ? 'var(--color-brand)'
-                        : arr.indexOf(step as any) > i
-                          ? 'var(--color-success)'
-                          : 'var(--color-overlay)',
-                    color:
-                      step === s ||
-                      arr.indexOf(step as any) > i
-                        ? '#fff'
-                        : 'var(--color-text-muted)',
-                    borderRadius: 'var(--radius-full)',
-                  }}
-                >
-                  {arr.indexOf(step as any) > i ? (
-                    <CheckCircle2 className="h-4 w-4" />
-                  ) : (
-                    i + 1
-                  )}
-                </div>
-                {i < arr.length - 1 && (
-                  <div
-                    className="h-0.5 w-8"
-                    style={{
-                      backgroundColor:
-                        arr.indexOf(step as any) > i
-                          ? 'var(--color-success)'
-                          : 'var(--color-border)',
-                    }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+          <Stepper steps={steps} currentStepIndex={currentStepIndex} className="mb-8 px-4" />
         )}
 
         {/* Card container */}
-        <div
-          className="rounded-xl p-6"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            boxShadow: 'var(--shadow-md)',
-            borderRadius: 'var(--radius-lg)',
-          }}
-        >
+        <Card>
           {/* ============================== STEP 1: FORM ============================== */}
           {step === 'form' && (
-            <form
-              onSubmit={handleSubmit(onFormNext)}
-              className="space-y-4"
-              noValidate
-            >
-              <div>
-                <label
-                  htmlFor="fullName"
-                  className="mb-1 block text-sm font-medium"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  Full Name
-                </label>
-                <input
-                  id="fullName"
-                  type="text"
-                  {...register('fullName')}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                  style={{
-                    borderColor: errors.fullName
-                      ? 'var(--color-danger)'
-                      : 'var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--color-overlay)',
-                  }}
-                  placeholder="Juan Dela Cruz"
-                />
-                {errors.fullName && (
-                  <p
-                    className="mt-1 flex items-center gap-1 text-xs"
-                    style={{ color: 'var(--color-danger)' }}
-                    role="alert"
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.fullName.message}
-                  </p>
-                )}
+            <form onSubmit={handleSubmit(onFormNext)} className="space-y-5" noValidate>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField label="First Name" error={errors.firstName?.message}>
+                  <Input
+                    {...register('firstName')}
+                    placeholder="Juan"
+                    error={!!errors.firstName}
+                  />
+                </FormField>
+
+                <FormField label="Middle Name" hint="Optional" error={errors.middleName?.message}>
+                  <Input
+                    {...register('middleName')}
+                    placeholder="Santos"
+                    error={!!errors.middleName}
+                  />
+                </FormField>
+
+                <FormField label="Last Name" error={errors.lastName?.message}>
+                  <Input
+                    {...register('lastName')}
+                    placeholder="Dela Cruz"
+                    error={!!errors.lastName}
+                  />
+                </FormField>
               </div>
 
-              <div>
-                <label
-                  htmlFor="contactNumber"
-                  className="mb-1 block text-sm font-medium"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  Contact Number
-                </label>
-                <input
-                  id="contactNumber"
+              <FormField label="Contact Number" error={errors.contactNumber?.message}>
+                <Input
                   type="tel"
                   {...register('contactNumber')}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                  style={{
-                    borderColor: errors.contactNumber
-                      ? 'var(--color-danger)'
-                      : 'var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--color-overlay)',
-                  }}
                   placeholder="09171234567"
+                  error={!!errors.contactNumber}
                 />
-                {errors.contactNumber && (
-                  <p
-                    className="mt-1 flex items-center gap-1 text-xs"
-                    style={{ color: 'var(--color-danger)' }}
-                    role="alert"
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.contactNumber.message}
-                  </p>
-                )}
-              </div>
+              </FormField>
 
-              <div>
-                <label
-                  htmlFor="purpose"
-                  className="mb-1 block text-sm font-medium"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  Purpose of Visit
-                </label>
-                <textarea
-                  id="purpose"
+              <FormField label="Purpose of Visit" error={errors.purpose?.message}>
+                <Textarea
                   {...register('purpose')}
                   rows={3}
-                  className="w-full resize-none rounded-md border px-3 py-2 text-sm outline-none"
-                  style={{
-                    borderColor: errors.purpose
-                      ? 'var(--color-danger)'
-                      : 'var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--color-overlay)',
-                  }}
                   placeholder="e.g. Meeting with Prof. Santos, Room 201"
+                  error={!!errors.purpose}
                 />
-                {errors.purpose && (
-                  <p
-                    className="mt-1 flex items-center gap-1 text-xs"
-                    style={{ color: 'var(--color-danger)' }}
-                    role="alert"
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.purpose.message}
-                  </p>
-                )}
-              </div>
+              </FormField>
 
-              <div>
-                <label
-                  htmlFor="visitDate"
-                  className="mb-1 block text-sm font-medium"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  Visit Date
-                </label>
-                <input
-                  id="visitDate"
+              <FormField label="Visit Date" error={errors.visitDate?.message}>
+                <Input
                   type="date"
                   {...register('visitDate')}
                   min={today}
-                  className="w-full rounded-md border px-3 py-2 text-sm outline-none"
-                  style={{
-                    borderColor: errors.visitDate
-                      ? 'var(--color-danger)'
-                      : 'var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--color-overlay)',
-                  }}
+                  error={!!errors.visitDate}
                 />
-                {errors.visitDate && (
-                  <p
-                    className="mt-1 flex items-center gap-1 text-xs"
-                    style={{ color: 'var(--color-danger)' }}
-                    role="alert"
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    {errors.visitDate.message}
-                  </p>
-                )}
-              </div>
+              </FormField>
 
               {/* Data Privacy Act Consent */}
-              <div
-                className="rounded-md p-3"
-                style={{
-                  backgroundColor: 'var(--color-brand-light)',
-                  borderRadius: 'var(--radius-sm)',
-                }}
-              >
-                <label className="flex items-start gap-2 text-xs">
+              <div className="rounded-xl p-4 bg-[var(--color-brand-light)] border border-red-100">
+                <label className="flex items-start gap-3 cursor-pointer">
                   <input
                     type="checkbox"
                     {...register('consent')}
-                    className="mt-0.5"
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-[var(--color-earist-red)] focus:ring-[var(--color-earist-red)]"
                   />
-                  <span style={{ color: 'var(--color-text-primary)' }}>
+                  <span className="text-sm text-[var(--color-text-primary)]">
                     I consent to the collection and processing of my personal
                     information in accordance with the{' '}
                     <strong>Data Privacy Act of 2012 (RA 10173)</strong>. My
@@ -521,142 +408,86 @@ export function GetPassPage() {
                   </span>
                 </label>
                 {errors.consent && (
-                  <p
-                    className="mt-1 flex items-center gap-1 text-xs"
-                    style={{ color: 'var(--color-danger)' }}
-                    role="alert"
-                  >
+                  <p className="mt-2 flex items-center gap-1 text-xs text-[var(--color-danger)]" role="alert">
                     <AlertCircle className="h-3 w-3" />
                     {errors.consent.message}
                   </p>
                 )}
               </div>
 
-              <button
-                type="submit"
-                disabled={!isValid}
-                className="flex w-full items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                style={{
-                  backgroundColor: 'var(--color-brand)',
-                  borderRadius: 'var(--radius-sm)',
-                }}
-              >
+              <Button type="submit" disabled={!isValid} className="w-full" size="lg" icon={<ArrowRight className="h-4 w-4" />}>
                 Next: Take Photo
-                <ArrowRight className="h-4 w-4" />
-              </button>
+              </Button>
             </form>
           )}
 
           {/* ============================== STEP 2: PHOTO ============================== */}
           {step === 'photo' && (
-            <div className="space-y-4">
-              <h2
-                className="text-center text-lg font-semibold"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                Take Your Photo
-              </h2>
-              <p
-                className="text-center text-xs"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                Look directly at the camera. This photo will be shown to the
-                guard for verification.
-              </p>
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Take Your Photo</h2>
+                <p className="text-sm text-[var(--color-text-secondary)] mt-1">
+                  Look directly at the camera. This photo will be shown to the guard for verification.
+                </p>
+              </div>
 
               {webcam.error && (
-                <div
-                  className="rounded-md p-3 text-sm"
-                  style={{
-                    backgroundColor: 'var(--color-danger-light)',
-                    color: 'var(--color-danger)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                  role="alert"
-                >
+                <div className="rounded-md p-3 text-sm bg-red-50 text-red-600 border border-red-200" role="alert">
                   {webcam.error}
                 </div>
               )}
 
-              <div
-                className="relative mx-auto aspect-[3/4] w-full max-w-xs overflow-hidden rounded-lg"
-                style={{
-                  backgroundColor: '#000',
-                  borderRadius: 'var(--radius-md)',
-                }}
-              >
-                <video
-                  ref={webcam.videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="h-full w-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
+              <div className="mx-auto w-full max-w-xs overflow-hidden rounded-xl border border-[var(--color-border)] shadow-sm bg-black aspect-[3/4] relative">
+                {webcam.videoRef && (
+                  <video
+                    ref={webcam.videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="h-full w-full object-cover"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                )}
               </div>
 
               <div className="flex gap-3">
-                <button
-                  type="button"
+                <Button 
+                  variant="secondary"
                   onClick={() => {
                     webcam.stop();
                     setStep('form');
                   }}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
-                  style={{
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text-primary)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
+                  className="flex-1"
+                  icon={<ArrowLeft className="h-4 w-4" />}
                 >
-                  <ArrowLeft className="h-4 w-4" />
                   Back
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button 
                   onClick={onCapturePhoto}
                   disabled={!webcam.isActive}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                  style={{
-                    backgroundColor: 'var(--color-brand)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
+                  className="flex-1"
+                  icon={<Camera className="h-4 w-4" />}
                 >
-                  <Camera className="h-4 w-4" />
                   Capture
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {/* ============================== STEP 3: VALID ID ============================== */}
           {step === 'id' && (
-            <div className="space-y-4">
-              <h2
-                className="text-center text-lg font-semibold"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                Upload Valid ID
-              </h2>
-              <p
-                className="text-center text-xs"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                Take a photo or upload an image of your valid government-issued
-                ID.
-              </p>
+            <div className="space-y-6">
+              <div className="text-center">
+                <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Upload Valid ID</h2>
+                <p className="text-sm text-[var(--color-text-secondary)] mt-1">
+                  Take a photo or upload an image of your valid government-issued ID.
+                </p>
+              </div>
 
               {idPreview ? (
-                <div className="space-y-3">
-                  <div
-                    className="relative mx-auto max-w-xs overflow-hidden rounded-lg"
-                    style={{ borderRadius: 'var(--radius-md)' }}
-                  >
-                    <img
-                      src={idPreview}
-                      alt="Valid ID preview"
-                      className="w-full"
-                    />
+                <div className="space-y-4">
+                  <div className="relative mx-auto max-w-xs overflow-hidden rounded-xl border border-[var(--color-border)] shadow-sm">
+                    <img src={idPreview} alt="Valid ID preview" className="w-full object-cover" />
                     <button
                       type="button"
                       onClick={() => {
@@ -664,49 +495,25 @@ export function GetPassPage() {
                         setIdBlob(null);
                         setIdPreview(null);
                       }}
-                      className="absolute right-2 top-2 rounded-full p-1 text-white"
-                      style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+                      className="absolute right-2 top-2 rounded-full p-1 text-white bg-black/60 hover:bg-black/80 transition-colors"
                       aria-label="Remove ID image"
                     >
                       <X className="h-4 w-4" />
                     </button>
                   </div>
                   <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={onRetakePhoto}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
-                      style={{
-                        borderColor: 'var(--color-border)',
-                        color: 'var(--color-text-primary)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <RotateCcw className="h-4 w-4" />
+                    <Button variant="secondary" onClick={onRetakePhoto} className="flex-1" icon={<RotateCcw className="h-4 w-4" />}>
                       Retake Photo
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setStep('review')}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white"
-                      style={{
-                        backgroundColor: 'var(--color-brand)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
+                    </Button>
+                    <Button onClick={() => setStep('review')} className="flex-1" icon={<ArrowRight className="h-4 w-4" />}>
                       Review
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div
-                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed"
-                    style={{
-                      borderColor: 'var(--color-border-strong)',
-                      borderRadius: 'var(--radius-md)',
-                    }}
+                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-gray-50 hover:bg-gray-100 transition-colors"
                     onClick={() => fileInputRef.current?.click()}
                     role="button"
                     tabIndex={0}
@@ -716,20 +523,11 @@ export function GetPassPage() {
                       }
                     }}
                   >
-                    <Upload
-                      className="mb-2 h-8 w-8"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    />
-                    <span
-                      className="text-sm font-medium"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
+                    <Upload className="mb-3 h-10 w-10 text-[var(--color-text-muted)]" />
+                    <span className="text-sm font-bold text-[var(--color-text-primary)]">
                       Tap to upload or take a photo
                     </span>
-                    <span
-                      className="text-xs"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
+                    <span className="text-xs text-[var(--color-text-muted)] mt-1">
                       JPG, PNG, or WebP — max 5MB
                     </span>
                   </div>
@@ -742,19 +540,9 @@ export function GetPassPage() {
                     className="hidden"
                     aria-label="Upload valid ID"
                   />
-                  <button
-                    type="button"
-                    onClick={onRetakePhoto}
-                    className="flex w-full items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
-                    style={{
-                      borderColor: 'var(--color-border)',
-                      color: 'var(--color-text-primary)',
-                      borderRadius: 'var(--radius-sm)',
-                    }}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
+                  <Button variant="ghost" onClick={onRetakePhoto} className="w-full" icon={<ArrowLeft className="h-4 w-4" />}>
                     Retake Selfie
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
@@ -762,119 +550,61 @@ export function GetPassPage() {
 
           {/* ============================== STEP 4: REVIEW ============================== */}
           {step === 'review' && (
-            <div className="space-y-4">
-              <h2
-                className="text-center text-lg font-semibold"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
+            <div className="space-y-6">
+              <h2 className="text-center text-lg font-bold text-[var(--color-text-primary)]">
                 Review Your Pass
               </h2>
 
               {submitError && (
-                <div
-                  className="rounded-md p-3 text-sm"
-                  style={{
-                    backgroundColor: 'var(--color-danger-light)',
-                    color: 'var(--color-danger)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                  role="alert"
-                >
+                <div className="rounded-md p-3 text-sm bg-red-50 text-red-600 border border-red-200" role="alert">
                   {submitError}
                 </div>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {/* Info summary */}
-                <div
-                  className="rounded-md p-3 text-sm"
-                  style={{
-                    backgroundColor: 'var(--color-overlay)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                >
-                  <div className="grid gap-2">
+                <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)]">
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span
-                        className="text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Name
-                      </span>
-                      <p
-                        className="font-semibold"
-                        style={{ color: 'var(--color-text-primary)' }}
-                      >
-                        {getValues('fullName')}
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Name</span>
+                      <p className="font-bold text-[var(--color-text-primary)] mt-1">
+                        {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}
                       </p>
                     </div>
                     <div>
-                      <span
-                        className="text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Contact
-                      </span>
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        {getValues('contactNumber')}
-                      </p>
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Contact</span>
+                      <p className="font-semibold text-[var(--color-text-primary)] mt-1">{getValues('contactNumber')}</p>
                     </div>
-                    <div>
-                      <span
-                        className="text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Purpose
-                      </span>
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        {getValues('purpose')}
-                      </p>
+                    <div className="col-span-2">
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Purpose</span>
+                      <p className="font-semibold text-[var(--color-text-primary)] mt-1">{getValues('purpose')}</p>
                     </div>
-                    <div>
-                      <span
-                        className="text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Visit Date
-                      </span>
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        {getValues('visitDate')}
-                      </p>
+                    <div className="col-span-2">
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Visit Date</span>
+                      <p className="font-semibold text-[var(--color-text-primary)] mt-1">{getValues('visitDate')}</p>
                     </div>
                   </div>
                 </div>
 
                 {/* Photo + ID thumbnails */}
-                <div className="flex gap-3">
+                <div className="flex gap-4">
                   {photoPreview && (
                     <div className="flex-1">
-                      <span
-                        className="mb-1 block text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Your Photo
-                      </span>
+                      <span className="mb-2 block text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Your Photo</span>
                       <img
                         src={photoPreview}
                         alt="Your photo"
-                        className="aspect-[3/4] w-full rounded-md object-cover"
-                        style={{ borderRadius: 'var(--radius-sm)' }}
+                        className="aspect-[3/4] w-full rounded-xl object-cover border border-[var(--color-border)] shadow-sm"
                       />
                     </div>
                   )}
                   {idPreview && (
                     <div className="flex-1">
-                      <span
-                        className="mb-1 block text-xs font-medium"
-                        style={{ color: 'var(--color-text-muted)' }}
-                      >
-                        Valid ID
-                      </span>
+                      <span className="mb-2 block text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Valid ID</span>
                       <img
                         src={idPreview}
                         alt="Valid ID"
-                        className="aspect-[3/4] w-full rounded-md object-cover"
-                        style={{ borderRadius: 'var(--radius-sm)' }}
+                        className="aspect-[3/4] w-full rounded-xl object-cover border border-[var(--color-border)] shadow-sm"
                       />
                     </div>
                   )}
@@ -882,143 +612,82 @@ export function GetPassPage() {
               </div>
 
               <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isPeakMode) {
-                      setStep('photo');
-                    } else {
-                      setStep('id');
-                    }
-                  }}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium"
-                  style={{
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text-primary)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
+                <Button 
+                  variant="secondary" 
+                  onClick={() => setStep(isPeakMode ? 'photo' : 'id')} 
+                  className="flex-1"
+                  icon={<ArrowLeft className="h-4 w-4" />}
                 >
-                  <ArrowLeft className="h-4 w-4" />
                   Back
-                </button>
-                <button
-                  type="button"
-                  onClick={onSubmit}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white"
-                  style={{
-                    backgroundColor: 'var(--color-success)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
+                </Button>
+                <Button 
+                  onClick={onSubmit} 
+                  className="flex-1"
+                  icon={<CheckCircle2 className="h-4 w-4" />}
                 >
-                  <CheckCircle2 className="h-4 w-4" />
                   Generate Pass
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {/* ============================== GENERATING ============================== */}
           {step === 'generating' && (
-            <div className="flex flex-col items-center justify-center py-12">
-              <div
-                className="mb-4 h-10 w-10 animate-spin rounded-full border-3 border-t-transparent"
-                style={{ borderColor: 'var(--color-brand)' }}
-                role="status"
-              />
-              <p
-                className="text-sm font-medium"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-earist-red)]" role="status" />
+              <h2 className="text-xl font-bold text-[var(--color-text-primary)]">
                 Generating your gate pass…
-              </p>
-              <p
-                className="mt-1 text-xs"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                Uploading photos and creating your QR code
+              </h2>
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)] max-w-[250px]">
+                Uploading photos and creating your secure QR code.
               </p>
             </div>
           )}
 
           {/* ============================== STEP 5: DONE ============================== */}
           {step === 'done' && qrDataUrl && (
-            <div className="space-y-4 text-center">
-              <div
-                className="mx-auto flex h-12 w-12 items-center justify-center rounded-full"
-                style={{ backgroundColor: 'var(--color-success-light)' }}
-              >
-                <CheckCircle2
-                  className="h-6 w-6"
-                  style={{ color: 'var(--color-success)' }}
-                />
+            <div className="space-y-6 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-[var(--color-success)] mb-2">
+                <CheckCircle2 className="h-8 w-8" />
               </div>
 
               <div>
-                <h2
-                  className="text-lg font-bold"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
+                <h2 className="text-2xl font-bold text-[var(--color-text-primary)]">
                   Gate Pass Ready!
                 </h2>
-                <p
-                  className="mt-1 text-xs"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  Show this QR code at the entry scanner when you arrive.
+                <p className="mt-2 text-sm text-[var(--color-text-secondary)] max-w-[280px] mx-auto">
+                  Show this QR code at the entry scanner when you arrive at the gate.
                 </p>
               </div>
 
-              <div className="mx-auto inline-block rounded-lg bg-white p-4">
-                <img
-                  src={qrDataUrl}
-                  alt="Gate Pass QR Code"
-                  className="h-64 w-64"
-                />
+              <div className="mx-auto inline-block rounded-2xl bg-white p-4 border-2 border-gray-100 shadow-sm">
+                <img src={qrDataUrl} alt="Gate Pass QR Code" className="h-64 w-64" />
               </div>
 
-              <div
-                className="rounded-md p-3 text-left text-sm"
-                style={{
-                  backgroundColor: 'var(--color-overlay)',
-                  borderRadius: 'var(--radius-sm)',
-                }}
-              >
-                <p>
-                  <strong>Name:</strong> {getValues('fullName')}
+              <div className="rounded-xl p-4 text-left text-sm bg-gray-50 border border-[var(--color-border)]">
+                <p className="mb-1">
+                  <span className="font-semibold text-[var(--color-text-secondary)]">Name:</span>{' '}
+                  <span className="font-bold text-[var(--color-text-primary)]">
+                    {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}
+                  </span>
+                </p>
+                <p className="mb-1">
+                  <span className="font-semibold text-[var(--color-text-secondary)]">Date:</span>{' '}
+                  <span className="font-bold text-[var(--color-text-primary)]">{getValues('visitDate')}</span>
                 </p>
                 <p>
-                  <strong>Date:</strong> {getValues('visitDate')}
-                </p>
-                <p>
-                  <strong>Valid:</strong> 08:00 AM – 05:00 PM
+                  <span className="font-semibold text-[var(--color-text-secondary)]">Valid:</span>{' '}
+                  <span className="font-bold text-[var(--color-text-primary)]">08:00 AM – 05:00 PM</span>
                 </p>
               </div>
 
               <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={downloadQR}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors"
-                  style={{
-                    borderColor: 'var(--color-border)',
-                    color: 'var(--color-text-primary)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                >
-                  <Download className="h-4 w-4" />
+                <Button variant="secondary" onClick={downloadQR} className="flex-1" icon={<Download className="h-4 w-4" />}>
                   Download
-                </button>
-                <button
-                  type="button"
-                  onClick={shareQR}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white transition-colors"
-                  style={{
-                    backgroundColor: 'var(--color-brand)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                >
+                </Button>
+                <Button onClick={shareQR} className="flex-1">
                   Email / Share
-                </button>
+                </Button>
               </div>
 
               <p
@@ -1029,8 +698,8 @@ export function GetPassPage() {
               </p>
             </div>
           )}
-        </div>
+        </Card>
       </div>
-    </main>
+    </PageShell>
   );
 }

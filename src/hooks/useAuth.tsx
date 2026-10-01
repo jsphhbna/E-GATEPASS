@@ -5,9 +5,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { onAuthStateChanged, type User } from 'firebase/auth';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+import { toast } from 'sonner';
 import type { AppUser, AuthRole, AuthState, Device } from '@/types';
 
 const AuthContext = createContext<AuthState>({
@@ -85,6 +86,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       try {
         const { role, userData } = await resolveRole(user);
+
+        if (role === 'admin' || role === 'guard') {
+          await user.reload();
+          if (!auth.currentUser?.emailVerified) {
+            await signOut(auth);
+            toast.error(
+              'Account not verified. Please verify your email first. Check your inbox, spam, or trash folder for the verification email.',
+              { id: 'unverified-toast' }
+            );
+            // setState to unauthenticated will happen on the next onAuthStateChanged(null)
+            return;
+          }
+          // Force token refresh so Firestore rules receive email_verified: true
+          await auth.currentUser?.getIdToken(true);
+        }
+
+        if (role === 'guard' && userData && 'mustChangePassword' in userData && userData.mustChangePassword === true) {
+          setState({
+            status: 'requires_password_change',
+            uid: user.uid,
+            role,
+            userData,
+          });
+          return;
+        }
+
         setState({
           status: 'authenticated',
           uid: user.uid,

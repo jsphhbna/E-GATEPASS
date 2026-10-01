@@ -12,7 +12,8 @@ import {
   getDoc,
   limit,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
+import { signOut, updatePassword } from 'firebase/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { AuthenticatedImage } from '@/components/AuthenticatedImage';
 import type { GatePass } from '@/types';
@@ -20,12 +21,21 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Search,
   WifiOff,
-  Shield,
+  MapPin,
+  User,
   Volume2,
   BarChart2,
+  UserCheck,
+  X,
+  ZoomIn,
+  LogOut,
+  Key,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+import { Button, Card, Input, StatCard, Modal, FormField, ConfirmModal } from '@/components/ui';
+import { BrandMark } from '@/components/BrandMark';
 import { toast } from 'sonner';
 
 interface PassWithId extends GatePass {
@@ -33,13 +43,15 @@ interface PassWithId extends GatePass {
 }
 
 export function GuardPage() {
-  const { uid } = useAuth();
+  const { uid, userData } = useAuth();
   const [passes, setPasses] = useState<PassWithId[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectionReasons, setRejectionReasons] = useState<string[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [zoomImage, setZoomImage] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Daily Report stats
@@ -49,6 +61,16 @@ export function GuardPage() {
     rejected: 0,
     total: 0,
   });
+
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
+
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   // ============================================================
   // LOAD PREMADE REJECTION REASONS FROM settings/app
@@ -212,6 +234,7 @@ export function GuardPage() {
       toast.success(`${pass.visitorName} rejected`);
       setRejectingId(null);
       setRejectReason('');
+      setIsRejecting(false);
     } catch (err) {
       console.error('Reject error:', err);
       toast.error('Failed to reject. Try again.');
@@ -224,8 +247,8 @@ export function GuardPage() {
   const filteredPasses = searchTerm
     ? passes.filter(
         (p) =>
-          p.visitorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          p.purpose.toLowerCase().includes(searchTerm.toLowerCase())
+          (p.visitorName ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (p.purpose ?? '').toLowerCase().includes(searchTerm.toLowerCase())
       )
     : passes;
 
@@ -236,6 +259,58 @@ export function GuardPage() {
     if (!pass.scannedAt) return false;
     const scannedMs = pass.scannedAt.toMillis();
     return Date.now() - scannedMs > 30000;
+  }
+
+  // ============================================================
+  // ============================================================
+  // AUTH ACTIONS
+  // ============================================================
+  async function handleSignOut() {
+    setIsSigningOut(true);
+    try {
+      await signOut(auth);
+    } catch (err) {
+      toast.error('Failed to sign out');
+    } finally {
+      setIsSigningOut(false);
+      setShowSignOutModal(false);
+    }
+  }
+
+  async function handlePasswordChange(e: React.FormEvent) {
+    e.preventDefault();
+    if (!currentPassword) return toast.error('Please enter your current password');
+    if (!newPassword) return toast.error('Please enter a new password');
+    if (newPassword !== confirmPassword) return toast.error('Passwords do not match');
+
+    setPasswordLoading(true);
+    try {
+      if (!auth.currentUser || !auth.currentUser.email) throw new Error('Not authenticated');
+      
+      // Re-authenticate first
+      const { EmailAuthProvider, reauthenticateWithCredential } = await import('firebase/auth');
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPassword);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+
+      // Now update the password
+      await updatePassword(auth.currentUser, newPassword);
+      
+      toast.success('Password updated successfully');
+      setIsChangingPassword(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        toast.error('Incorrect current password.');
+      } else if (err.code === 'auth/weak-password') {
+        toast.error('Password is too weak. Please use at least 6 characters.');
+      } else {
+        toast.error(err.message || 'Failed to update password');
+      }
+    } finally {
+      setPasswordLoading(false);
+    }
   }
 
   // ============================================================
@@ -270,74 +345,75 @@ export function GuardPage() {
       )}
 
       {/* Header & Search */}
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            Guard Queue
-          </h1>
-          <p
-            className="mt-1 text-sm"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {passes.length} pending verification
-            {passes.length !== 1 ? 's' : ''}
-          </p>
+      <div className="mb-6 flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1
+              className="text-2xl font-bold"
+              style={{ color: 'var(--color-text-primary)' }}
+            >
+              Guard Queue
+            </h1>
+            <p
+              className="mt-1 text-sm"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              {passes.length} pending verification
+              {passes.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium text-[var(--color-text-secondary)] mr-2 hidden sm:inline-block">
+              {userData && 'name' in userData ? userData.name : 'Guard'}
+            </span>
+            <Button variant="secondary" size="sm" onClick={() => setIsChangingPassword(true)} icon={<Key className="w-4 h-4" />}>
+              Change Password
+            </Button>
+            <Button variant="destructive-outline" size="sm" onClick={() => setShowSignOutModal(true)} icon={<LogOut className="w-4 h-4" />}>
+              Sign Out
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-3 sm:items-end">
-          <div className="relative w-full sm:w-64">
-            <Search
-              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
-              style={{ color: 'var(--color-text-muted)' }}
-            />
-            <input
+        <div className="flex flex-col gap-3 sm:items-end mt-2">
+          <div className="w-full sm:w-64">
+            <Input
               type="search"
               placeholder="Search by name or purpose…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full rounded-md border py-2 pl-9 pr-3 text-sm outline-none"
-              style={{
-                borderColor: 'var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--color-surface)',
-              }}
             />
           </div>
         </div>
       </div>
 
       {/* Daily Report Summary */}
-      <div 
-        className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-lg border p-4"
-        style={{
-          backgroundColor: 'var(--color-surface)',
-          borderColor: 'var(--color-border)',
-          borderRadius: 'var(--radius-md)',
-        }}
-      >
-        <div className="flex items-center gap-3 col-span-2 sm:col-span-4 mb-2">
-          <BarChart2 className="h-5 w-5" style={{ color: 'var(--color-brand)' }} />
-          <h2 className="font-semibold text-sm" style={{ color: 'var(--color-text-primary)' }}>Today's Activity</h2>
-        </div>
-        <div className="rounded-md bg-gray-50/50 dark:bg-gray-800/50 p-3">
-          <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Total Issued</p>
-          <p className="text-xl font-bold">{dailyStats.total}</p>
-        </div>
-        <div className="rounded-md bg-blue-50 dark:bg-blue-900/20 p-3">
-          <p className="text-xs font-medium text-blue-600 dark:text-blue-400">Currently Inside</p>
-          <p className="text-xl font-bold text-blue-700 dark:text-blue-300">{dailyStats.inside}</p>
-        </div>
-        <div className="rounded-md bg-green-50 dark:bg-green-900/20 p-3">
-          <p className="text-xs font-medium text-green-600 dark:text-green-400">Exited</p>
-          <p className="text-xl font-bold text-green-700 dark:text-green-300">{dailyStats.exited}</p>
-        </div>
-        <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-3">
-          <p className="text-xs font-medium text-red-600 dark:text-red-400">Rejected</p>
-          <p className="text-xl font-bold text-red-700 dark:text-red-300">{dailyStats.rejected}</p>
-        </div>
+      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          title="Total Issued"
+          value={dailyStats.total}
+          icon={<BarChart2 className="h-5 w-5 text-[var(--color-text-secondary)]" />}
+        />
+        <StatCard
+          title="Currently Inside"
+          value={dailyStats.inside}
+          icon={<UserCheck className="h-5 w-5 text-[var(--color-success)]" />}
+          trend={`${dailyStats.inside} visitors on campus`}
+          trendUp={true}
+        />
+        <StatCard
+          title="Exited"
+          value={dailyStats.exited}
+          icon={<UserCheck className="h-5 w-5 text-[var(--color-text-secondary)]" />}
+          trend={`${dailyStats.exited} left campus`}
+          trendUp={false}
+        />
+        <StatCard
+          title="Rejected"
+          value={dailyStats.rejected}
+          icon={<X className="h-5 w-5 text-[var(--color-danger)]" />}
+        />
       </div>
 
       {/* Pass Cards */}
@@ -349,10 +425,9 @@ export function GuardPage() {
             borderRadius: 'var(--radius-lg)',
           }}
         >
-          <Shield
-            className="mb-3 h-10 w-10"
-            style={{ color: 'var(--color-text-muted)' }}
-          />
+          <div className="mb-4 opacity-60">
+            <BrandMark size="lg" />
+          </div>
           <p
             className="text-sm font-medium"
             style={{ color: 'var(--color-text-secondary)' }}
@@ -370,51 +445,45 @@ export function GuardPage() {
 
             if (isActive) {
               return (
-                <div
+                <Card
                   key={pass.id}
-                  className="col-span-full overflow-hidden rounded-lg border"
-                  style={{
-                    backgroundColor: 'var(--color-surface)',
-                    borderColor: isPendingLong(pass) ? 'var(--color-warning)' : 'var(--color-border)',
-                    borderWidth: isPendingLong(pass) ? '2px' : '1px',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: 'var(--shadow-md)',
-                  }}
+                  className={`col-span-full overflow-hidden transition-all motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200 ${
+                    isPendingLong(pass) 
+                      ? 'border-[var(--color-warning)] ring-1 ring-[var(--color-warning)] motion-safe:animate-pulse' 
+                      : ''
+                  }`}
                 >
                   {isPendingLong(pass) && (
-                    <div
-                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold"
-                      style={{ backgroundColor: 'var(--color-warning-light)', color: 'var(--color-warning)' }}
-                    >
+                    <div className="flex items-center gap-2 px-4 py-3 text-sm font-bold bg-amber-50 text-amber-700 border-b border-amber-200">
                       <Volume2 className="h-4 w-4" />
                       Pending for over 30 seconds
                     </div>
                   )}
 
-                  <div className="p-5">
-                    <div className="mb-5 grid gap-5 md:grid-cols-3">
+                  <div className="p-6">
+                    <div className="mb-6 grid gap-6 md:grid-cols-3">
                       {/* Panel 1: Info */}
-                      <div className="flex flex-col justify-center border-b pb-4 md:border-b-0 md:border-r md:pb-0 md:pr-4">
-                        <h3 className="text-xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                      <div className="flex flex-col justify-center border-b pb-6 md:border-b-0 md:border-r md:pb-0 md:pr-6 border-[var(--color-border)]">
+                        <h3 className="text-2xl font-bold text-[var(--color-text-primary)]">
                           {pass.visitorName}
                         </h3>
-                        <p className="mt-1 text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                        <p className="mt-2 text-base text-[var(--color-text-secondary)]">
                           {pass.purpose}
                         </p>
-                        <div className="mt-4 space-y-1">
-                          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                        <div className="mt-6 space-y-2">
+                          <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
                             <Clock className="h-4 w-4" />
                             <span>
                               Scanned: {pass.scannedAt ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString() : '—'}
                             </span>
                           </div>
                           {pass.gate && (
-                            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                              <Shield className="h-4 w-4" />
+                            <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
+                              <MapPin className="h-4 w-4" />
                               <span>Gate: {pass.gate}</span>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                          <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
                             <CheckCircle2 className="h-4 w-4" />
                             <span>
                               Valid: {new Date(pass.validFrom.toMillis()).toLocaleTimeString()} - {new Date(pass.validUntil.toMillis()).toLocaleTimeString()}
@@ -424,112 +493,73 @@ export function GuardPage() {
                       </div>
 
                       {/* Panel 2: Face Photo */}
-                      <div className="flex flex-col items-center border-b pb-4 md:border-b-0 md:border-r md:pb-0 md:pr-4">
-                        <span className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">Live Photo</span>
-                        <AuthenticatedImage
-                          publicId={pass.photoPublicId}
-                          alt="Face Photo"
-                          className="h-48 w-40 rounded-lg object-cover shadow-sm bg-gray-100"
-                        />
+                      <div className="flex flex-col items-center border-b pb-6 md:border-b-0 md:border-r md:pb-0 md:pr-6 border-[var(--color-border)]">
+                        <span className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Live Photo</span>
+                        <div 
+                          className="relative group cursor-pointer"
+                          onClick={() => setZoomImage(pass.photoPublicId)}
+                        >
+                          <AuthenticatedImage
+                            publicId={pass.photoPublicId}
+                            alt="Face Photo"
+                            className="h-56 w-48 rounded-xl object-cover shadow-sm bg-gray-100 transition-transform group-hover:scale-[1.02]"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors rounded-xl flex items-center justify-center">
+                            <ZoomIn className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md h-8 w-8" />
+                          </div>
+                        </div>
                       </div>
 
                       {/* Panel 3: ID Photo */}
                       <div className="flex flex-col items-center">
-                        <span className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">Valid ID</span>
+                        <span className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Valid ID</span>
                         {pass.idImagePublicId ? (
-                          <AuthenticatedImage
-                            publicId={pass.idImagePublicId}
-                            alt="ID Photo"
-                            className="h-48 w-full max-w-xs rounded-lg object-contain shadow-sm bg-gray-100"
-                          />
+                          <div 
+                            className="relative group cursor-pointer w-full max-w-xs"
+                            onClick={() => setZoomImage(pass.idImagePublicId!)}
+                          >
+                            <AuthenticatedImage
+                              publicId={pass.idImagePublicId}
+                              alt="ID Photo"
+                              className="h-56 w-full rounded-xl object-contain shadow-sm bg-gray-100 transition-transform group-hover:scale-[1.02]"
+                            />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors rounded-xl flex items-center justify-center">
+                              <ZoomIn className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md h-8 w-8" />
+                            </div>
+                          </div>
                         ) : (
-                          <div className="flex h-48 w-full max-w-xs items-center justify-center rounded-lg bg-gray-100 text-xs font-medium text-gray-400">
-                            No ID (Peak Mode / Walk-in)
+                          <div className="flex h-56 w-full max-w-xs items-center justify-center rounded-xl bg-gray-50 border-2 border-dashed border-gray-200 text-sm font-medium text-gray-400">
+                            No ID (Walk-in)
                           </div>
                         )}
                       </div>
                     </div>
 
                     {/* Actions */}
-                    {rejectingId === pass.id ? (
-                      <div className="space-y-3">
-                        <select
-                          value={rejectReason}
-                          onChange={(e) => setRejectReason(e.target.value)}
-                          className="w-full rounded-md border px-3 py-2.5 text-sm outline-none"
-                          style={{
-                            borderColor: 'var(--color-border)',
-                            borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'var(--color-overlay)',
-                          }}
-                        >
-                          <option value="">Select reason…</option>
-                          {rejectionReasons.map((reason) => (
-                            <option key={reason} value={reason}>
-                              {reason}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="flex gap-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRejectingId(null);
-                              setRejectReason('');
-                            }}
-                            className="flex-1 rounded-md border px-4 py-2.5 text-sm font-medium"
-                            style={{
-                              borderColor: 'var(--color-border)',
-                              borderRadius: 'var(--radius-sm)',
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleReject(pass)}
-                            disabled={!rejectReason}
-                            className="flex-1 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                            style={{
-                              backgroundColor: 'var(--color-danger)',
-                              borderRadius: 'var(--radius-sm)',
-                            }}
-                          >
-                            Confirm Reject
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex gap-3">
-                        <button
-                          type="button"
+                      <div className="flex gap-3 max-w-md mx-auto md:max-w-none">
+                        <Button
                           onClick={() => handleApprove(pass)}
-                          className="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-3 text-sm font-semibold text-white"
-                          style={{
-                            backgroundColor: 'var(--color-success)',
-                            borderRadius: 'var(--radius-sm)',
-                          }}
+                          className="flex-1"
+                          size="lg"
+                          icon={<CheckCircle2 className="h-5 w-5" />}
                         >
-                          <CheckCircle2 className="h-5 w-5" />
                           Approve Visitor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setRejectingId(pass.id)}
-                          className="flex flex-1 items-center justify-center gap-2 rounded-md border px-4 py-3 text-sm font-semibold"
-                          style={{
-                            borderColor: 'var(--color-danger)',
-                            color: 'var(--color-danger)',
-                            borderRadius: 'var(--radius-sm)',
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          onClick={() => {
+                            setRejectingId(pass.id);
+                            setIsRejecting(true);
                           }}
+                          className="flex-1"
+                          size="lg"
+                          icon={<XCircle className="h-5 w-5" />}
                         >
-                          <XCircle className="h-5 w-5" />
                           Reject
-                        </button>
+                        </Button>
                       </div>
-                    )}
                   </div>
-                </div>
+                </Card>
               );
             }
 
@@ -537,42 +567,221 @@ export function GuardPage() {
             // COMPACT CARD (Queued Passes)
             // ==========================================
             return (
-              <div
+              <Card
                 key={pass.id}
-                className="overflow-hidden rounded-lg border opacity-75 transition-opacity hover:opacity-100"
-                style={{
-                  backgroundColor: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                }}
+                className="overflow-hidden opacity-75 transition-opacity hover:opacity-100"
               >
-                <div className="p-3">
-                  <div className="flex items-start gap-3">
-                    {/* Placeholder icon instead of full image */}
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
-                      <Shield className="h-5 w-5 text-gray-400" />
+                <div className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gray-100">
+                      <User className="h-5 w-5 text-gray-400" />
                     </div>
-                    <div className="flex-1 overflow-hidden">
-                      <h3 className="truncate text-sm font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="truncate text-sm font-bold text-[var(--color-text-primary)]">
                         {pass.visitorName}
                       </h3>
-                      <p className="truncate text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                      <p className="truncate text-xs text-[var(--color-text-secondary)] mt-0.5">
                         {pass.purpose}
                       </p>
-                      <div className="mt-1 flex items-center gap-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] font-medium">
                         <Clock className="h-3 w-3" />
                         {pass.scannedAt ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString() : '—'}
                         {pass.gate && ` • ${pass.gate}`}
                       </div>
                     </div>
                   </div>
-                  {/* Note: Actions hidden on compact cards to enforce sequential processing, or we can leave a tiny "Make Active" button, but since it auto-promotes when the first is resolved, it's fine. */}
+                  <div className="mt-4 flex gap-2">
+                    <Button
+                      onClick={() => handleApprove(pass)}
+                      className="flex-1"
+                      size="sm"
+                      icon={<CheckCircle2 className="h-4 w-4" />}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => {
+                        setRejectingId(pass.id);
+                        setIsRejecting(true);
+                      }}
+                      className="flex-1"
+                      size="sm"
+                      icon={<XCircle className="h-4 w-4" />}
+                    >
+                      Reject
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              </Card>
             );
           })}
         </div>
       )}
+      {/* Reject Modal */}
+      <Modal
+        isOpen={isRejecting}
+        onClose={() => {
+          setIsRejecting(false);
+          setRejectReason('');
+        }}
+        title="Reject Visitor"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--color-text-secondary)]">
+            Please provide a reason for rejection. This will be recorded in the audit logs.
+          </p>
+          <select
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            className="w-full rounded-lg border border-[var(--color-border)] px-4 py-3 text-sm outline-none focus:border-[var(--color-brand)] focus:ring-1 focus:ring-[var(--color-brand)] transition-shadow"
+          >
+            <option value="">Select reason…</option>
+            {rejectionReasons.map((reason) => (
+              <option key={reason} value={reason}>
+                {reason}
+              </option>
+            ))}
+          </select>
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setIsRejecting(false);
+                setRejectReason('');
+              }}
+              className="w-full sm:w-auto"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const pass = passes.find(p => p.id === rejectingId);
+                if (pass) handleReject(pass);
+              }}
+              disabled={!rejectReason}
+              className="w-full sm:w-auto"
+            >
+              Confirm Reject
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Image Zoom Modal */}
+      <Modal
+        isOpen={!!zoomImage}
+        onClose={() => setZoomImage(null)}
+        hideTitleRow
+        size="lg"
+      >
+        {zoomImage && (
+          <div className="flex items-center justify-center">
+            <AuthenticatedImage
+              publicId={zoomImage}
+              alt="Zoomed"
+              className="w-full h-auto max-h-[85vh] object-contain rounded-xl"
+            />
+          </div>
+        )}
+      </Modal>
+
+      {/* Voluntary Password Change Modal */}
+      {isChangingPassword && (
+        <Modal
+          isOpen={true}
+          onClose={() => {
+            setIsChangingPassword(false);
+            setNewPassword('');
+            setConfirmPassword('');
+          }}
+          title="Change Password"
+          description="Update your account security"
+          size="sm"
+        >
+          <form onSubmit={handlePasswordChange} className="space-y-4">
+            <FormField label="Current Password">
+              <div className="relative">
+                <Input
+                  type={showPasswords ? "text" : "password"}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  disabled={passwordLoading}
+                  placeholder="••••••••"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasswords(!showPasswords)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
+            </FormField>
+            <FormField label="New Password">
+              <div className="relative">
+                <Input
+                  type={showPasswords ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  disabled={passwordLoading}
+                  placeholder="••••••••"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasswords(!showPasswords)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
+            </FormField>
+            <FormField label="Confirm Password">
+              <div className="relative">
+                <Input
+                  type={showPasswords ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={passwordLoading}
+                  placeholder="••••••••"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasswords(!showPasswords)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
+                >
+                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
+            </FormField>
+            <div className="pt-2 flex justify-end gap-3">
+              <Button type="button" variant="ghost" onClick={() => setIsChangingPassword(false)} disabled={passwordLoading}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={passwordLoading}>
+                Update
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      <ConfirmModal
+        isOpen={showSignOutModal}
+        onClose={() => setShowSignOutModal(false)}
+        title="Confirm Sign Out"
+        description="Are you sure you want to log out of your account?"
+        onConfirm={handleSignOut}
+        confirmText={isSigningOut ? "Signing Out..." : "Sign Out"}
+        cancelText="Cancel"
+        isDestructive={true}
+        loading={isSigningOut}
+      />
     </main>
   );
 }

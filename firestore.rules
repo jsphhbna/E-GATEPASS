@@ -11,6 +11,7 @@ service cloud.firestore {
     
     function isAdmin() {
       return isLoggedIn() && 
+             request.auth.token.email_verified == true &&
              exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && 
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
@@ -18,6 +19,7 @@ service cloud.firestore {
     
     function isGuard() {
       return isLoggedIn() && 
+             request.auth.token.email_verified == true &&
              exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'guard' && 
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
@@ -43,7 +45,12 @@ service cloud.firestore {
     match /users/{userId} {
       // Admins can read/write all. Users can read their own.
       allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == userId);
-      allow write: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isLoggedIn() && 
+        request.auth.uid == userId && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['privacyAcceptedAt'])
+      );
     }
 
     match /devices/{deviceId} {
@@ -55,7 +62,13 @@ service cloud.firestore {
     match /visitors/{visitorId} {
       // Visitors (anonymous) can create only (and read their own data via client state if needed, though mostly write-only).
       // Guards and Admins can read. Admins can update for data retention purging.
-      allow create: if isLoggedIn(); 
+      allow create: if isLoggedIn() &&
+                       request.resource.data.keys().hasAll(['firstName', 'lastName', 'consent']) &&
+                       request.resource.data.firstName is string &&
+                       request.resource.data.firstName.size() > 0 &&
+                       request.resource.data.lastName is string &&
+                       request.resource.data.lastName.size() > 0 &&
+                       request.resource.data.consent == true;
       allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow update: if isAdmin();
       allow delete: if false; // Retention purge is an update to imagesPurgedAt, not delete
@@ -69,7 +82,8 @@ service cloud.firestore {
       // Admins can read all.
       
       allow create: if isLoggedIn() && request.resource.data.visitorId != null;
-      allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
+      allow get: if isAdmin() || isGuard() || isActiveDevice() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
+      allow list: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       
       allow update: if 
         isAdmin() || 
