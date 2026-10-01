@@ -9,31 +9,38 @@ interface StepperProps {
   steps: Step[];
   currentStepIndex: number;
   className?: string;
+  orientation?: 'horizontal' | 'vertical';
 }
 
-export function Stepper({ steps, currentStepIndex, className = '' }: StepperProps) {
+export function Stepper({ steps, currentStepIndex, className = '', orientation = 'horizontal' }: StepperProps) {
+  const isVertical = orientation === 'vertical';
+
   return (
     <nav aria-label="Progress" className={className}>
-      <ol role="list" className="flex items-center justify-between w-full">
+      <ol role="list" className={`flex ${isVertical ? 'flex-col gap-4' : 'items-center justify-between w-full'}`}>
         {steps.map((step, index) => {
           const isCompleted = index < currentStepIndex;
           const isCurrent = index === currentStepIndex;
           const isUpcoming = index > currentStepIndex;
 
           return (
-            <li key={step.id} className="relative flex flex-col items-center group flex-1">
+            <li key={step.id} className={`relative flex ${isVertical ? 'flex-row items-center gap-4' : 'flex-col items-center flex-1 group'}`}>
               {/* Connecting Line */}
               {index !== steps.length - 1 && (
                 <div
-                  className={`absolute top-4 sm:top-5 left-1/2 w-full h-[3px] rounded-full -z-10 transition-colors duration-200 motion-reduce:transition-none ${
+                  className={`absolute -z-10 transition-colors duration-200 motion-reduce:transition-none ${
                     isCompleted ? 'bg-[var(--color-earist-maroon)]' : 'bg-gray-200'
+                  } ${
+                    isVertical 
+                      ? 'left-[1.15rem] sm:left-[1.25rem] top-10 h-full w-[3px] rounded-full' 
+                      : 'top-4 sm:top-5 left-1/2 w-full h-[3px] rounded-full'
                   }`}
                   aria-hidden="true"
                 />
               )}
 
               <div
-                className={`relative flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full border-2 transition-colors duration-200 motion-reduce:transition-none
+                className={`relative flex h-8 w-8 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-200 motion-reduce:transition-none
                   ${isCompleted ? 'border-[var(--color-earist-maroon)] bg-[var(--color-earist-maroon)]' : ''}
                   ${isCurrent ? 'border-[var(--color-earist-red)] bg-[var(--color-earist-red)] ring-4 ring-[var(--color-brand-light)]' : ''}
                   ${isUpcoming ? 'border-gray-300 bg-white' : ''}
@@ -56,9 +63,9 @@ export function Stepper({ steps, currentStepIndex, className = '' }: StepperProp
               </div>
               
               <span
-                className={`mt-2 sm:mt-3 text-[10px] sm:text-xs text-center px-1 sm:px-0 sm:whitespace-nowrap 
+                className={`text-[10px] sm:text-xs ${isVertical ? 'text-left' : 'mt-2 sm:mt-3 text-center px-1 sm:px-0 sm:whitespace-nowrap'}
                   ${isCompleted ? 'text-[var(--color-earist-maroon)] font-semibold' : ''}
-                  ${isCurrent ? 'text-[var(--color-earist-red)] font-bold' : ''}
+                  ${isCurrent ? 'text-[var(--color-earist-red)] font-bold text-sm sm:text-base' : ''}
                   ${isUpcoming ? 'text-gray-600 font-medium' : ''}
                 `}
               >

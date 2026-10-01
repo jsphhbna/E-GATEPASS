@@ -15,10 +15,10 @@ import {
   getAuth,
 } from 'firebase/auth';
 import { initializeApp } from 'firebase/app';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import type { Device, DeviceType, DeviceStatus } from '@/types';
-import { Tablet, Plus, X, Lock, Unlock } from 'lucide-react';
+import { Tablet, Plus, X, Lock, Unlock, Key, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -69,6 +69,10 @@ export function DevicesPage() {
   const [creating, setCreating] = useState(false);
   const [revokingDevice, setRevokingDevice] = useState<DeviceWithId | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [editingDevice, setEditingDevice] = useState<DeviceWithId | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [isUpdatingAuth, setIsUpdatingAuth] = useState(false);
 
   const {
     register,
@@ -114,6 +118,7 @@ export function DevicesPage() {
         name: data.name,
         type: data.type as DeviceType,
         gate: data.gate,
+        email: data.email,
         status: 'active' as DeviceStatus,
         createdBy: uid,
         createdAt: serverTimestamp(),
@@ -191,6 +196,56 @@ export function DevicesPage() {
       toast.error('Failed to revoke device.');
     } finally {
       setIsRevoking(false);
+    }
+  }
+
+  async function handleUpdateCredentials(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingDevice) return;
+
+    if (!editEmail && !editPassword) {
+      toast.error('Please enter a new email or password.');
+      return;
+    }
+
+    setIsUpdatingAuth(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const res = await fetch('/.netlify/functions/update-device-auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          targetUid: editingDevice.id,
+          email: editEmail || undefined,
+          password: editPassword || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || 'Failed to update credentials');
+      }
+
+      await addDoc(collection(db, 'auditLogs'), {
+        actorUid: uid,
+        action: 'device_credentials_updated',
+        target: `devices/${editingDevice.id}`,
+        details: `Updated credentials for device "${editingDevice.name}"`,
+        timestamp: serverTimestamp(),
+      });
+
+      toast.success('Device credentials updated successfully');
+      setEditingDevice(null);
+    } catch (err: any) {
+      console.error('Update credentials error:', err);
+      toast.error(err.message || 'Failed to update credentials');
+    } finally {
+      setIsUpdatingAuth(false);
     }
   }
 
@@ -343,19 +398,42 @@ export function DevicesPage() {
                   />
                 </div>
 
-                <p className="mb-6 text-sm font-medium text-[var(--color-text-secondary)]">
-                  {typeBadge(device.type)}
-                </p>
+                <div className="mb-6 space-y-3">
+                  <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+                    {typeBadge(device.type)}
+                  </p>
+                  
+                  {device.email && (
+                    <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] bg-gray-50 rounded-md p-2 border border-[var(--color-border)]">
+                      <Mail className="h-4 w-4 shrink-0 text-gray-400" />
+                      <span className="truncate" title={device.email}>{device.email}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <Button
-                variant={device.status === 'active' ? 'destructive' : 'primary'}
-                onClick={() => toggleDeviceStatus(device)}
-                className="w-full"
-                icon={device.status === 'active' ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
-              >
-                {device.status === 'active' ? 'Revoke Device' : 'Reactivate Device'}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setEditingDevice(device);
+                    setEditEmail(device.email || '');
+                    setEditPassword('');
+                  }}
+                  className="flex-1"
+                  icon={<Key className="h-4 w-4" />}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant={device.status === 'active' ? 'destructive' : 'primary'}
+                  onClick={() => toggleDeviceStatus(device)}
+                  className="flex-[2]"
+                  icon={device.status === 'active' ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+                >
+                  {device.status === 'active' ? 'Revoke' : 'Reactivate'}
+                </Button>
+              </div>
             </Card>
           ))}
         </div>
@@ -378,6 +456,53 @@ export function DevicesPage() {
         isDestructive
         loading={isRevoking}
       />
+
+      {/* Edit Credentials Modal */}
+      <Modal
+        isOpen={!!editingDevice}
+        onClose={() => {
+          setEditingDevice(null);
+          setEditEmail('');
+          setEditPassword('');
+        }}
+        title="Edit Credentials"
+        size="sm"
+        preventClose={isUpdatingAuth}
+      >
+        <form onSubmit={handleUpdateCredentials} className="space-y-5">
+          <p className="text-sm text-[var(--color-text-secondary)] mb-2">
+            Update login credentials for <strong>{editingDevice?.name}</strong>. Leave a field blank if you do not wish to change it.
+          </p>
+
+          <FormField label="New Login Email">
+            <Input
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+              placeholder="Leave blank to keep current email"
+            />
+          </FormField>
+
+          <FormField label="New Login Password">
+            <Input
+              type="password"
+              value={editPassword}
+              onChange={(e) => setEditPassword(e.target.value)}
+              placeholder="Leave blank to keep current password"
+              minLength={6}
+            />
+          </FormField>
+
+          <Button
+            type="submit"
+            disabled={isUpdatingAuth || (!editEmail && !editPassword)}
+            loading={isUpdatingAuth}
+            className="w-full"
+          >
+            {isUpdatingAuth ? 'Updating...' : 'Save Changes'}
+          </Button>
+        </form>
+      </Modal>
     </div>
   );
 }

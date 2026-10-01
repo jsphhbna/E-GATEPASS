@@ -267,12 +267,22 @@ export function KioskPage() {
     steps.findIndex(s => s.id === step);
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-start px-4 py-8 bg-[var(--color-canvas)]">
-      <div className="w-full max-w-lg print:w-full print:max-w-none print:p-0">
+    <main className="flex min-h-dvh flex-col lg:flex-row items-center lg:items-start justify-center gap-8 px-4 py-8 lg:py-12 bg-[var(--color-canvas)] max-w-7xl mx-auto w-full">
+      {/* Left Column (Fixed on Desktop) */}
+      <div className="w-full max-w-lg lg:w-[320px] lg:shrink-0 lg:sticky lg:top-12 flex flex-col items-center lg:items-start print:hidden">
         
-        {/* Header - Hidden on print */}
-        <div className="mb-8 text-center print:hidden">
-          <BrandMark size="lg" className="mx-auto mb-4" />
+        {/* Header */}
+        <div className="mb-8 text-center lg:text-left w-full">
+          <div 
+            onDoubleClick={() => {
+              if (window.confirm('Admin: Sign out of this device?')) {
+                auth.signOut();
+              }
+            }}
+            className="inline-block cursor-default"
+          >
+            <BrandMark size="lg" className="mx-auto lg:mx-0 mb-4" />
+          </div>
           <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">
             Walk-in Registration Kiosk
           </h1>
@@ -280,9 +290,21 @@ export function KioskPage() {
 
         {/* Step Indicator */}
         {step !== 'done' && step !== 'generating' && (
-          <Stepper steps={steps} currentStepIndex={currentStepIndex} className="mb-8 px-4 print:hidden" />
+          <div className="w-full">
+            {/* Horizontal Stepper for Mobile/Portrait */}
+            <div className="lg:hidden w-full mb-8">
+              <Stepper steps={steps} currentStepIndex={currentStepIndex} className="w-full px-4" orientation="horizontal" />
+            </div>
+            {/* Vertical Stepper for Landscape Desktop */}
+            <div className="hidden lg:block w-full">
+              <Stepper steps={steps} currentStepIndex={currentStepIndex} className="w-full" orientation="vertical" />
+            </div>
+          </div>
         )}
+      </div>
 
+      {/* Right Column (Dynamic Content) */}
+      <div className="w-full max-w-lg lg:max-w-4xl flex-1 print:w-full print:max-w-none print:p-0">
         {/* Card container */}
         <Card className="print:shadow-none print:p-0 print:border-0 print:bg-transparent">
           {step === 'form' && (

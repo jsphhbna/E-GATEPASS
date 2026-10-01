@@ -96,6 +96,7 @@ export interface Device {
   name: string;
   type: DeviceType;
   gate: string;
+  email?: string;
   status: DeviceStatus;
   createdBy: string;
   createdAt: Timestamp;

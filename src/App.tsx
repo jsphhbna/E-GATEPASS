@@ -5,6 +5,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LandingPage } from '@/pages/LandingPage';
 import { GetPassPage } from '@/pages/GetPassPage';
 import { LoginPage } from '@/pages/LoginPage';
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { KioskPage } from '@/pages/KioskPage';
 import { GuardPage } from '@/pages/GuardPage';
 import { AdminPage } from '@/pages/AdminPage';
@@ -35,6 +36,7 @@ export function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/get-pass" element={<GetPassPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
           {/* Kiosk — requires kiosk device account */}
           <Route element={<ProtectedRoute allowedRoles={['kiosk']} />}>

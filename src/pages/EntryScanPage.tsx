@@ -9,7 +9,7 @@ import {
   Timestamp,
   updateDoc,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
@@ -243,8 +243,15 @@ export function EntryScanPage() {
       className="flex min-h-dvh flex-col items-center justify-center"
       style={{ backgroundColor: '#0a0a0a' }}
     >
-      {/* Gate label */}
-      <div className="mb-4 text-center">
+      {/* Gate label with hidden logout */}
+      <div 
+        className="mb-4 text-center cursor-default"
+        onDoubleClick={() => {
+          if (window.confirm('Admin: Sign out of this scanner?')) {
+            auth.signOut();
+          }
+        }}
+      >
         <p className="text-xs font-medium uppercase tracking-widest text-white/50">
           Entry Scanner
         </p>

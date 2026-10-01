@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { signInWithEmailAndPassword, sendEmailVerification, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
@@ -163,6 +163,12 @@ export function LoginPage() {
               )}
             </div>
           )}
+
+          <div className="flex justify-end mt-2">
+            <Link to="/forgot-password" className="text-sm font-medium text-[var(--color-brand)] hover:underline focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] rounded-sm">
+              Forgot password?
+            </Link>
+          </div>
 
           <Button
             type="submit"
