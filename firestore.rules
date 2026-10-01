@@ -38,9 +38,10 @@ service cloud.firestore {
              get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.status == 'active';
     }
 
-    // Returns true if the caller is NOT a known user/device (i.e. anonymous visitor)
+    // Firebase's signed provider claim identifies an Anonymous Auth session.
     function isAnonymousVisitor() {
       return isLoggedIn() &&
+             request.auth.token.firebase.sign_in_provider == 'anonymous' &&
              !exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
              !exists(/databases/$(database)/documents/devices/$(request.auth.uid));
     }
@@ -173,7 +174,8 @@ service cloud.firestore {
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'scannedAt', 'entryDeviceId', 'gate']) &&
               request.resource.data.scannedAt is timestamp &&
               request.resource.data.entryDeviceId == request.auth.uid &&
-              request.resource.data.gate is string && request.resource.data.gate.size() > 0
+               request.resource.data.gate is string && request.resource.data.gate.size() > 0 &&
+               request.resource.data.gate == get(/databases/$(database)/documents/devices/$(request.auth.uid)).data.gate
             ) ||
             // Entry device: issued → expired (only if pass is actually expired)
             (
@@ -217,8 +219,37 @@ service cloud.firestore {
     }
 
     match /visitLogs/{logId} {
-      // Devices and Guards can create. Admins can read. No one can update/delete.
-      allow create: if isActiveDevice() || isGuard();
+      // Match the scanner and guard payloads, including invalid QR codes with no visitor.
+      allow create: if isLoggedIn() &&
+        request.resource.data.keys().hasAll(['passToken', 'visitorId', 'event', 'reason', 'deviceId', 'gate', 'guardUid', 'timestamp']) &&
+        request.resource.data.keys().hasOnly(['passToken', 'visitorId', 'event', 'reason', 'deviceId', 'gate', 'guardUid', 'timestamp']) &&
+        request.resource.data.passToken is string &&
+        request.resource.data.event in ['scan_entry', 'scan_exit', 'invalid_scan', 'approved', 'rejected'] &&
+        request.resource.data.timestamp is timestamp &&
+        (request.resource.data.gate is string || request.resource.data.gate == null) &&
+        (
+          (request.resource.data.event == 'invalid_scan' && request.resource.data.visitorId == null) ||
+          (request.resource.data.event != 'invalid_scan' && request.resource.data.visitorId is string && request.resource.data.visitorId.size() > 0 && request.resource.data.passToken.size() > 0)
+        ) &&
+        (
+          (request.resource.data.event in ['invalid_scan', 'rejected'] && request.resource.data.reason is string && request.resource.data.reason.size() > 0) ||
+          (request.resource.data.event in ['scan_entry', 'scan_exit', 'approved'] && request.resource.data.reason == null)
+        ) &&
+        (
+          (
+            request.resource.data.deviceId is string && request.resource.data.deviceId == request.auth.uid &&
+            request.resource.data.guardUid == null && request.resource.data.gate is string &&
+            (
+              (isDevice('entry') && request.resource.data.event in ['scan_entry', 'invalid_scan']) ||
+              (isDevice('exit') && request.resource.data.event in ['scan_exit', 'invalid_scan'])
+            )
+          ) ||
+          (
+            isGuard() && request.resource.data.event in ['approved', 'rejected'] &&
+            request.resource.data.guardUid is string && request.resource.data.guardUid == request.auth.uid &&
+            request.resource.data.deviceId == null
+          )
+        );
       allow read: if isAdmin() || isGuard();
       allow update, delete: if false;
     }
