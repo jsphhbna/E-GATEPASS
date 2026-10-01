@@ -18,7 +18,12 @@ export const handler: Handler = async (event) => {
       ? new Date(userRecord.tokensValidAfterTime).getTime() 
       : 0;
 
-    // Verify the password was actually changed (tokens revoked after creation)
+    // SECURITY NOTE: tokensValidAfterTime is updated when a password changes,
+    // but it is also updated during manual token revocation (revokeRefreshTokens).
+    // While it is not a perfect 1-to-1 signal for "password changed" alone,
+    // it is the most reliable server-side indicator available in Firebase Auth
+    // without implementing a custom password-history database.
+    // We verify it was updated at least 10s after account creation.
     if (tokensValidAfter <= creationTime + 10000) {
       return { 
         statusCode: 403, 

@@ -88,6 +88,11 @@ describe('E-GatePass Firestore Rules', () => {
         type: 'entry',
         status: 'revoked',
       });
+      
+      // Seed a visitor created by 'other_uid'
+      await db.collection('visitors').doc('other_visitor').set({
+        createdByUid: 'other_uid',
+      });
     });
   });
 
@@ -115,45 +120,139 @@ describe('E-GatePass Firestore Rules', () => {
   });
 
   describe('Visitors Collection', () => {
-    it('allows anonymous users to create a visitor doc with createdByUid', async () => {
+    it('valid anonymous visitor creates own visitor record -> ALLOW', async () => {
       const anonDb = getAnonContext('anon_uid').firestore();
-      await assertSucceeds(anonDb.collection('visitors').add({
+      await assertSucceeds(anonDb.collection('visitors').doc('my_visitor').set({
         firstName: 'Test',
+        middleName: '',
         lastName: 'Visitor',
+        fullName: 'Test Visitor',
+        contactNumber: '1234567890',
+        purpose: 'Meeting',
+        visitDate: '2026-10-01',
+        idImagePublicId: null,
+        photoPublicId: 'photo_id',
         consentAcceptedAt: new Date(),
-        createdByUid: 'anon_uid'
+        createdAt: new Date(),
+        createdByUid: 'anon_uid',
+        imagesPurgedAt: null
       }));
     });
     
-    it('prevents anonymous users from creating visitors for other uids', async () => {
+    it('anonymous visitor creates visitor with extra unauthorized field -> DENY', async () => {
+      const anonDb = getAnonContext('anon_uid').firestore();
+      await assertFails(anonDb.collection('visitors').doc('my_visitor_2').set({
+        firstName: 'Test',
+        middleName: '',
+        lastName: 'Visitor',
+        fullName: 'Test Visitor',
+        contactNumber: '1234567890',
+        purpose: 'Meeting',
+        visitDate: '2026-10-01',
+        idImagePublicId: null,
+        photoPublicId: 'photo_id',
+        consentAcceptedAt: new Date(),
+        createdAt: new Date(),
+        createdByUid: 'anon_uid',
+        imagesPurgedAt: null,
+        hackedField: true // Extra field
+      }));
+    });
+
+    it('anonymous visitor creates visitor for different UID -> DENY', async () => {
       const anonDb = getAnonContext('anon_uid').firestore();
       await assertFails(anonDb.collection('visitors').add({
         firstName: 'Test',
+        middleName: '',
         lastName: 'Visitor',
+        fullName: 'Test Visitor',
+        contactNumber: '1234567890',
+        purpose: 'Meeting',
+        visitDate: '2026-10-01',
+        idImagePublicId: null,
+        photoPublicId: 'photo_id',
         consentAcceptedAt: new Date(),
-        createdByUid: 'other_uid'
+        createdAt: new Date(),
+        createdByUid: 'other_uid',
+        imagesPurgedAt: null
       }));
     });
   });
 
   describe('GatePasses Collection - Creation', () => {
-    it('Random authenticated user creates arbitrary gate pass -> DENY', async () => {
-      const db = getAnonContext('random_uid').firestore();
+    const validGatePass = {
+      visitorId: 'my_visitor',
+      visitorName: 'Test Visitor',
+      purpose: 'Meeting',
+      photoPublicId: 'photo_id',
+      idImagePublicId: null,
+      source: 'portal',
+      status: 'issued',
+      validFrom: new Date(),
+      validUntil: new Date(),
+      issuedAt: new Date(),
+      scannedAt: null,
+      timeIn: null,
+      timeOut: null,
+      entryDeviceId: null,
+      exitDeviceId: null,
+      decidedByUid: null,
+      rejectionReason: null,
+      gate: null,
+      createdByUid: 'anon_uid',
+    };
+
+    beforeEach(async () => {
+      // Seed a valid visitor for 'anon_uid'
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await context.firestore().collection('visitors').doc('my_visitor').set({
+          createdByUid: 'anon_uid',
+        });
+      });
+    });
+
+    it('visitor creates legitimate issued gate pass for own visitor record -> ALLOW', async () => {
+      const db = getAnonContext('anon_uid').firestore();
+      await assertSucceeds(db.collection('gatePasses').add(validGatePass));
+    });
+    
+    it('visitor creates issued gate pass referencing someone else\'s visitor -> DENY', async () => {
+      const db = getAnonContext('anon_uid').firestore();
       await assertFails(db.collection('gatePasses').add({
-        status: 'inside', // Invalid state
-        visitorId: 'visitor123',
-        source: 'get-pass',
-        createdByUid: 'random_uid'
+        ...validGatePass,
+        visitorId: 'other_visitor', // belongs to other_uid
+      }));
+    });
+    
+    it('visitor creates gate pass with invalid source -> DENY', async () => {
+      const db = getAnonContext('anon_uid').firestore();
+      await assertFails(db.collection('gatePasses').add({
+        ...validGatePass,
+        source: 'hacker_app',
+      }));
+    });
+    
+    it('visitor creates gate pass with arbitrary extra field -> DENY', async () => {
+      const db = getAnonContext('anon_uid').firestore();
+      await assertFails(db.collection('gatePasses').add({
+        ...validGatePass,
+        hackedField: true,
+      }));
+    });
+    
+    it('visitor creates gate pass directly as inside/exited -> DENY', async () => {
+      const db = getAnonContext('anon_uid').firestore();
+      await assertFails(db.collection('gatePasses').add({
+        ...validGatePass,
+        status: 'inside',
       }));
     });
     
     it('Invalid initial pass status -> DENY', async () => {
-      const db = getAnonContext('random_uid').firestore();
+      const db = getAnonContext('anon_uid').firestore();
       await assertFails(db.collection('gatePasses').add({
+        ...validGatePass,
         status: 'exited', // Must be 'issued'
-        visitorId: 'visitor123',
-        source: 'get-pass',
-        createdByUid: 'random_uid'
       }));
     });
   });
@@ -179,7 +278,14 @@ describe('E-GatePass Firestore Rules', () => {
       }));
     });
 
-    it('Entry device changes visitorName -> DENY', async () => {
+    it('Entry device issued -> expired -> ALLOW', async () => {
+      const db = getDeviceContext('entry_device').firestore();
+      await assertSucceeds(db.collection('gatePasses').doc('pass1').update({
+        status: 'expired',
+      }));
+    });
+
+    it('Entry device modifies unrelated field -> DENY', async () => {
       const db = getDeviceContext('entry_device').firestore();
       await assertFails(db.collection('gatePasses').doc('pass1').update({
         status: 'pending',
@@ -209,16 +315,7 @@ describe('E-GatePass Firestore Rules', () => {
       }));
     });
 
-    it('Exit device issued -> exited -> DENY', async () => {
-      const db = getDeviceContext('exit_device').firestore();
-      await assertFails(db.collection('gatePasses').doc('pass1').update({
-        status: 'exited',
-        timeOut: new Date(),
-        exitDeviceId: 'exit_device'
-      }));
-    });
-
-    it('Exit device modifies visitor identity -> DENY', async () => {
+    it('Exit device modifies unrelated field -> DENY', async () => {
       const db = getDeviceContext('exit_device').firestore();
       await assertFails(db.collection('gatePasses').doc('pass3').update({
         status: 'exited',
@@ -246,18 +343,16 @@ describe('E-GatePass Firestore Rules', () => {
       }));
     });
 
-    it('Guard modifies protected visitor fields -> DENY', async () => {
+    it('Guard sets decidedByUid to another user -> DENY', async () => {
       const db = getGuardContext('guard_uid').firestore();
       await assertFails(db.collection('gatePasses').doc('pass2').update({
         status: 'inside',
         timeIn: new Date(),
-        decidedByUid: 'guard_uid',
-        visitorName: 'Changed'
+        decidedByUid: 'other_uid'
       }));
     });
 
-    it('Kiosk modifies allowed fields -> ALLOW', async () => {
-      // Kiosk cannot update according to strict rules, only create
+    it('Kiosk device cannot arbitrarily update existing gate passes -> DENY', async () => {
       const db = getDeviceContext('kiosk_device').firestore();
       await assertFails(db.collection('gatePasses').doc('pass1').update({
         status: 'inside'

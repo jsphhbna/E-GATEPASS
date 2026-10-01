@@ -9,8 +9,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "netlify:dev": "netlify dev",
-    "emulators": "npx firebase-tools emulators:start --only auth,firestore",
-    "test": "npx firebase-tools emulators:exec \"vitest run\""
+    "emulators": "npx firebase-tools@13.10.0 emulators:start --only auth,firestore",
+    "test": "npx firebase-tools@13.10.0 emulators:exec \"vitest run\"",
+    "typecheck:functions": "tsc --noEmit --project netlify/tsconfig.json"
   },
   "repository": {
     "type": "git",

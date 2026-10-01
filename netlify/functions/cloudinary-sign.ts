@@ -32,9 +32,12 @@ export const handler: Handler = async (event) => {
     const body = event.body ? JSON.parse(event.body) : {};
     
     // SERVER-CONTROLLED ALLOWLIST
-    const ALLOWED_FOLDERS = ['e-gatepass/visitor-ids', 'e-gatepass/visitor-photos', 'e-gatepass'];
-    const requestedFolder = body.folder;
-    const folder = ALLOWED_FOLDERS.includes(requestedFolder) ? requestedFolder : 'e-gatepass/visitor-photos';
+    const ALLOWED_FOLDERS = ['e-gatepass/ids', 'e-gatepass/photos', 'e-gatepass'];
+    const requestedFolder = body.folder || 'e-gatepass';
+    if (!ALLOWED_FOLDERS.includes(requestedFolder)) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid folder requested' }) };
+    }
+    const folder = requestedFolder;
 
     // 3. Generate Cloudinary signature
     const timestamp = Math.round(new Date().getTime() / 1000);
