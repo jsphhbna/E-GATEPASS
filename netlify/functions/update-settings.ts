@@ -21,6 +21,11 @@ const settingsSchema = z.object({
   rejectionReasons: z.array(z.string().trim().min(1).max(160)).max(50),
   visitPurposes: z.array(purposeSchema).min(1).max(50),
   retentionDays: z.number().int().min(1).max(3650).optional(),
+  visitorRetentionDays: z.number().int().min(7).max(365).optional(),
+  imageRetentionDays: z.number().int().min(1).max(90).optional(),
+  auditRetentionDays: z.number().int().min(90).max(1095).optional(),
+  reconciliationRetentionDays: z.number().int().min(30).max(365).optional(),
+  automaticCleanupEnabled: z.boolean().optional(),
   workingHours: workingHoursSchema.optional(),
 }).strict();
 
@@ -48,7 +53,8 @@ export const handler: Handler = async (event) => {
     }
     const parsed = settingsSchema.safeParse(rawBody);
     if (!parsed.success) throw new RequestError(400, 'Invalid settings');
-    if (actor.role !== 'superadmin' && (parsed.data.retentionDays !== undefined || parsed.data.workingHours !== undefined)) {
+    const changesRetention = parsed.data.retentionDays !== undefined || parsed.data.visitorRetentionDays !== undefined || parsed.data.imageRetentionDays !== undefined || parsed.data.auditRetentionDays !== undefined || parsed.data.reconciliationRetentionDays !== undefined || parsed.data.automaticCleanupEnabled !== undefined;
+    if (actor.role !== 'superadmin' && (changesRetention || parsed.data.workingHours !== undefined)) {
       throw new RequestError(403, 'Only Super Admins may change security-sensitive settings');
     }
 
@@ -68,7 +74,7 @@ export const handler: Handler = async (event) => {
       ) {
         throw new RequestError(403, 'Actor account is no longer authorized');
       }
-      if (currentActor.role !== 'superadmin' && (parsed.data.retentionDays !== undefined || parsed.data.workingHours !== undefined)) {
+      if (currentActor.role !== 'superadmin' && (changesRetention || parsed.data.workingHours !== undefined)) {
         throw new RequestError(403, 'Only Super Admins may change security-sensitive settings');
       }
 
@@ -78,6 +84,11 @@ export const handler: Handler = async (event) => {
         rejectionReasons: [...new Set(parsed.data.rejectionReasons)],
         visitPurposes: parsed.data.visitPurposes,
         ...(parsed.data.retentionDays !== undefined ? { retentionDays: parsed.data.retentionDays } : {}),
+        ...(parsed.data.visitorRetentionDays !== undefined ? { visitorRetentionDays: parsed.data.visitorRetentionDays } : {}),
+        ...(parsed.data.imageRetentionDays !== undefined ? { imageRetentionDays: parsed.data.imageRetentionDays } : {}),
+        ...(parsed.data.auditRetentionDays !== undefined ? { auditRetentionDays: parsed.data.auditRetentionDays } : {}),
+        ...(parsed.data.reconciliationRetentionDays !== undefined ? { reconciliationRetentionDays: parsed.data.reconciliationRetentionDays } : {}),
+        ...(parsed.data.automaticCleanupEnabled !== undefined ? { automaticCleanupEnabled: parsed.data.automaticCleanupEnabled } : {}),
         ...(parsed.data.workingHours !== undefined ? { workingHours: parsed.data.workingHours } : {}),
         ...(!settingsSnapshot.exists ? { retentionDays: parsed.data.retentionDays ?? 30 } : {}),
       };

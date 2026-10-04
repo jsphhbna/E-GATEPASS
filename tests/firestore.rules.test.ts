@@ -500,18 +500,25 @@ describe('E-GatePass Firestore Rules', () => {
     it('Admin cannot change retention while Super Admin can', async () => {
       const forbidden = await invokeHandler(updateSettingsHandler, adminIdToken, 'POST', {
         ...operationalSettings,
-        retentionDays: 7,
+        imageRetentionDays: 7,
       });
       if (forbidden.statusCode !== 403) throw new Error(`Expected 403, received ${forbidden.statusCode}`);
 
       const allowed = await invokeHandler(updateSettingsHandler, superAdminIdToken, 'POST', {
         ...operationalSettings,
-        retentionDays: 60,
+        visitorRetentionDays: 60,
+        imageRetentionDays: 14,
+        auditRetentionDays: 730,
+        reconciliationRetentionDays: 120,
+        automaticCleanupEnabled: true,
       });
       if (allowed.statusCode !== 200) throw new Error(allowed.body);
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const settings = await context.firestore().collection('settings').doc('app').get();
-        if (settings.data()?.retentionDays !== 60) throw new Error('Retention setting was not updated');
+        const data = settings.data();
+        if (data?.visitorRetentionDays !== 60 || data.imageRetentionDays !== 14 || data.auditRetentionDays !== 730 || data.reconciliationRetentionDays !== 120 || data.automaticCleanupEnabled !== true) {
+          throw new Error('Retention policy was not updated');
+        }
       });
     });
 
@@ -666,6 +673,28 @@ describe('E-GatePass Firestore Rules', () => {
       } finally {
         vi.unstubAllGlobals();
       }
+    });
+
+    it('returns the distinct expired-image response without removing visitor or pass details', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await context.firestore().collection('visitors').doc('legacy_image_visitor').update({ imagesPurgedAt: Timestamp.now() });
+      });
+      const event = {
+        httpMethod: 'GET',
+        headers: { authorization: `Bearer ${adminIdToken}` },
+        queryStringParameters: { publicId: legacyPhotoId },
+      } as Parameters<typeof imageHandler>[0];
+      const response = await imageHandler(event, {} as Parameters<typeof imageHandler>[1]);
+      if (!response || response.statusCode !== 410 || !response.body.includes('Image expired')) {
+        throw new Error(`Expected expired image response, received ${response?.statusCode}`);
+      }
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const [visitor, pass] = await Promise.all([
+          context.firestore().collection('visitors').doc('legacy_image_visitor').get(),
+          context.firestore().collection('gatePasses').doc('legacy_image_pass').get(),
+        ]);
+        if (!visitor.exists || !pass.exists) throw new Error('Image expiry removed visitor or pass details');
+      });
     });
 
     it('issues owner-bound upload sessions only to valid upload actors', async () => {

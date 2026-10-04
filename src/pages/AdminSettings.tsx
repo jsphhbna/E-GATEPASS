@@ -13,6 +13,7 @@ import type { VisitPurposeOption } from '@/types';
 import { useAuth } from '@/hooks/useAuth';
 import { isSuperAdmin } from '@/lib/permissions';
 import { DEFAULT_WORKING_HOURS, normalizeWorkingHours } from '@/lib/workingHours';
+import { DEFAULT_RETENTION_POLICY, normalizeRetentionPolicy } from '@/lib/retentionPolicy';
 
 export function AdminSettings() {
   const { role } = useAuth();
@@ -22,7 +23,7 @@ export function AdminSettings() {
   const [purging, setPurging] = useState(false);
   
   const [settings, setSettings] = useState({
-    retentionDays: 30,
+    ...DEFAULT_RETENTION_POLICY,
     workingHours: DEFAULT_WORKING_HOURS,
     peakMode: false,
     rejectionReasons: [] as string[],
@@ -46,7 +47,7 @@ export function AdminSettings() {
         if (snap.exists()) {
           const data = snap.data();
           setSettings({
-            retentionDays: typeof data.retentionDays === 'number' ? data.retentionDays : 30,
+            ...normalizeRetentionPolicy(data),
             workingHours: normalizeWorkingHours(data.workingHours),
             peakMode: data.peakMode === true,
             rejectionReasons: Array.isArray(data.rejectionReasons) ? data.rejectionReasons : DEFAULT_REJECTION_REASONS,
@@ -54,7 +55,7 @@ export function AdminSettings() {
           });
         } else {
           const defaultSettings = {
-            retentionDays: 30,
+            ...DEFAULT_RETENTION_POLICY,
             workingHours: DEFAULT_WORKING_HOURS,
             peakMode: false,
             rejectionReasons: DEFAULT_REJECTION_REASONS,
@@ -93,7 +94,10 @@ export function AdminSettings() {
         })),
       };
       const settingsToSave = canManageSecuritySettings
-        ? { ...operationalSettings, retentionDays: settings.retentionDays, workingHours: settings.workingHours }
+        ? { ...operationalSettings, workingHours: settings.workingHours,
+          visitorRetentionDays: settings.visitorRetentionDays, imageRetentionDays: settings.imageRetentionDays,
+          auditRetentionDays: settings.auditRetentionDays, reconciliationRetentionDays: settings.reconciliationRetentionDays,
+          automaticCleanupEnabled: settings.automaticCleanupEnabled }
         : operationalSettings;
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Your session has expired. Please sign in again.');
@@ -223,47 +227,30 @@ export function AdminSettings() {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
-      let totalPurged = 0;
-      let totalFailed = 0;
-      let hasMore = true;
-
-      while (hasMore) {
-        const res = await fetch('/api/purge-images', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Purge failed: ${res.status} - ${text}`);
-        }
-
-        const data = await res.json() as {
-          successCount: number;
-          failedCount: number;
-          orphanDeletedCount?: number;
-          orphanFailedCount?: number;
-          hasMore: boolean;
-        };
-        
-        totalPurged += data.successCount;
-        totalFailed += data.failedCount + (data.orphanFailedCount || 0);
-
-        if (data.failedCount > 0 || (data.orphanFailedCount || 0) > 0) {
-          throw new Error(
-            `Images were deleted for ${totalPurged} visitor${totalPurged === 1 ? '' : 's'}, but ${totalFailed} could not be completed. The failed records were not marked as deleted. Please try again.`
-          );
-        }
-
-        hasMore = data.hasMore;
-        if (hasMore && data.successCount + (data.orphanDeletedCount || 0) === 0) {
-          throw new Error('Image deletion could not continue. Please try again.');
-        }
+      const res = await fetch('/api/purge-images', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Purge failed: ${res.status} - ${text}`);
       }
-
-      toast.success(`Images deleted for ${totalPurged} visitor${totalPurged === 1 ? '' : 's'}.`);
+      const data = await res.json() as {
+        successCount: number;
+        failedCount: number;
+        orphanDeletedCount?: number;
+        orphanFailedCount?: number;
+        hasMore: boolean;
+      };
+      const totalFailed = data.failedCount + (data.orphanFailedCount || 0);
+      if (totalFailed > 0) {
+        throw new Error(
+          `Images were deleted for ${data.successCount} visitor${data.successCount === 1 ? '' : 's'}, but ${totalFailed} could not be completed. The failed records were not marked as deleted. Please try again.`
+        );
+      }
+      toast.success(data.hasMore
+        ? `Images deleted for ${data.successCount} visitors. More eligible records remain; run another confirmed batch when ready.`
+        : `Images deleted for ${data.successCount} visitor${data.successCount === 1 ? '' : 's'}.`);
       setShowPurgeConfirm(false);
     } catch (err: any) {
       console.error(err);
@@ -381,21 +368,23 @@ export function AdminSettings() {
           <Card className="p-6">
             <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Data Retention</h2>
 
-            <div className="mb-8">
-              <label htmlFor="retention-days" className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Visitor Data Retention (Days)</label>
-              <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
-                How long visitor ID and photos are kept before they are eligible for deletion.
-              </p>
-              <div className="w-full max-w-[200px]">
-                <Input
-                  id="retention-days"
-                  type="number"
-                  min={1}
-                  value={settings.retentionDays}
-                  onChange={(e) => setSettings({ ...settings, retentionDays: parseInt(e.target.value) || 30 })}
-                />
-              </div>
+            <p className="mb-5 text-sm text-[var(--color-text-secondary)]">Automatic cleanup uses these policies for new eligible data. Export records needed for long-term archive before their retention deadline.</p>
+            <div className="mb-8 grid gap-4 sm:grid-cols-2">
+              {([
+                ['visitorRetentionDays', 'Visitor / visit records', 7, 365],
+                ['imageRetentionDays', 'Visitor images / valid IDs', 1, 90],
+                ['auditRetentionDays', 'Audit logs', 90, 1095],
+                ['reconciliationRetentionDays', 'Reconciliation records', 30, 365],
+              ] as const).map(([field, label, min, max]) => <div key={field}>
+                <label htmlFor={field} className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">{label} (days)</label>
+                <Input id={field} type="number" min={min} max={max} value={settings[field]}
+                  onChange={(event) => setSettings((current) => ({ ...current, [field]: Number(event.target.value) || min }))} />
+              </div>)}
             </div>
+            <label className="mb-8 flex items-center gap-3 text-sm font-medium text-[var(--color-text-primary)]">
+              <input type="checkbox" checked={settings.automaticCleanupEnabled} onChange={(event) => setSettings((current) => ({ ...current, automaticCleanupEnabled: event.target.checked }))} />
+              Enable automatic daily cleanup
+            </label>
 
             <div className="rounded-lg border border-[var(--color-danger)] bg-[var(--color-danger-light)] p-5">
               <div className="flex items-start gap-4">
@@ -403,7 +392,7 @@ export function AdminSettings() {
                 <div>
                   <h3 className="text-lg font-semibold text-[var(--color-danger-dark)]">Purge Eligible Images</h3>
                   <p className="mt-2 text-sm text-[var(--color-danger-dark)]">
-                    Permanently deletes visitor photos and ID images older than {settings.retentionDays} days. Visitor details and visit history are kept. This action cannot be undone.
+                    Permanently deletes eligible visitor photos and ID images under the {settings.imageRetentionDays}-day image policy. Visitor details and visit history are kept. This action cannot be undone.
                   </p>
                   <Button
                     variant="destructive"
@@ -557,7 +546,7 @@ export function AdminSettings() {
         title="Purge Images?"
         description={
           <>
-            You are about to permanently delete photos and ID images for <strong className="text-[var(--color-text-primary)]">{purgeEligibleCount}</strong> visitor{purgeEligibleCount === 1 ? '' : 's'} older than {purgeRetentionDays ?? settings.retentionDays} days. Visitor details and visit history will remain.
+            You are about to permanently delete photos and ID images for <strong className="text-[var(--color-text-primary)]">{purgeEligibleCount}</strong> eligible visitor{purgeEligibleCount === 1 ? '' : 's'} under the {purgeRetentionDays ?? settings.imageRetentionDays}-day image policy. Visitor details and visit history will remain.
             This action cannot be undone.
           </>
         }

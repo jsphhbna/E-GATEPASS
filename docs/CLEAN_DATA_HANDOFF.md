@@ -29,3 +29,9 @@ There is no separate emergency collection: Emergency reads current inside `gateP
 7. Create school Admin/device accounts, run the controlled lifecycle smoke test, and confirm developer/test data is gone.
 
 For a full fresh start, recreate settings, a first Super Admin, required Admins, and device Auth accounts/documents. For partial cleanup, keep `settings/app` and approved `devices`, while removing only approved visitor, pass, and history data. CSV exports are operational exports, not a complete disaster-recovery backup; take an approved Firestore/Auth/Cloudinary inventory before cleanup.
+
+## Environment and secrets handoff
+
+The incoming school technician needs approved GitHub, Netlify, Firebase, and Cloudinary access. Review the required variable **names** in `.env.example`; do not put values in GitHub, documentation, or tickets. Rotate credentials where policy requires, including generating a new `CRON_SECRET` and updating it only in Netlify.
+
+Before the handoff is complete, verify the non-secret runtime configuration remains `AWS_LAMBDA_JS_RUNTIME=nodejs24.x` and `NODE_OPTIONS=--experimental-require-module`, then redeploy if changed environment values require it. Verify scheduled retention cleanup, Firebase Admin Functions, Cloudinary Functions, and their logs. The detailed generation, Netlify setup, rotation, and classification procedure is in [Environment and Scheduled Cleanup Handoff](ENVIRONMENT_AND_CRON.md).

@@ -3,14 +3,14 @@ import { auth } from '@/lib/firebase';
 import { ImageOff } from 'lucide-react';
 
 interface AuthenticatedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
-  publicId: string;
+  publicId?: string | null;
   fallbackText?: string;
 }
 
 export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable', className = '', ...props }: AuthenticatedImageProps) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [state, setState] = useState<'loading' | 'ready' | 'expired' | 'missing' | 'temporary'>('loading');
 
   useEffect(() => {
     let active = true;
@@ -20,7 +20,7 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
     async function fetchImage() {
       try {
         setLoading(true);
-        setError(false);
+        setState('loading');
         setObjectUrl(null);
         
         const user = auth.currentUser;
@@ -29,13 +29,21 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
         }
 
         const token = await user.getIdToken();
-        const response = await fetch(`/api/image?publicId=${encodeURIComponent(publicId)}`, {
+        const response = await fetch(`/api/image?publicId=${encodeURIComponent(publicId || '')}`, {
           headers: {
             Authorization: `Bearer ${token}`
           },
           signal: controller.signal,
         });
 
+        if (response.status === 410) {
+          if (active) { setState('expired'); setLoading(false); }
+          return;
+        }
+        if (response.status === 404) {
+          if (active) { setState('missing'); setLoading(false); }
+          return;
+        }
         if (!response.ok) {
           throw new Error(`Failed to fetch image: ${response.status}`);
         }
@@ -47,11 +55,12 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
           url = URL.createObjectURL(blob);
           setObjectUrl(url);
           setLoading(false);
+          setState('ready');
         }
       } catch (err) {
         if (!controller.signal.aborted) console.error('Failed to load authenticated image:', err);
         if (active && !controller.signal.aborted) {
-          setError(true);
+          setState('temporary');
           setLoading(false);
         }
       }
@@ -61,7 +70,7 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
       fetchImage();
     } else {
       setLoading(false);
-      setError(true);
+      setState('missing');
     }
 
     return () => {
@@ -83,15 +92,17 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
     );
   }
 
-  if (error || !objectUrl) {
+  if (state !== 'ready' || !objectUrl) {
+    const message = state === 'expired' ? 'Image expired' : state === 'missing' ? 'No image available' : 'Image temporarily unavailable';
     return (
       <div 
         className={`flex flex-col items-center justify-center rounded-md border border-dashed border-[var(--color-border-strong)] bg-[var(--color-overlay)] p-4 text-center text-[var(--color-text-muted)] ${className}`}
         role="img"
-        aria-label={fallbackText}
+        aria-label={message}
       >
         <ImageOff className="h-6 w-6 mb-2" />
-        <span className="text-xs font-medium">{fallbackText}</span>
+        <span className="text-xs font-semibold">{message}</span>
+        {state === 'expired' && <span className="mt-1 text-xs">Removed under the configured image retention policy.</span>}
       </div>
     );
   }

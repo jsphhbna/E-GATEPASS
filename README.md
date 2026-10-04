@@ -35,13 +35,11 @@ npx tsc --noEmit
 npm run typecheck:functions
 ```
 
-## Environment variable names
+## Environment configuration
 
-Server-side: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`.
+Copy `.env.example` to `.env` or `.env.local` for local work, then supply local values; the template is tracked but local files are ignored. The four `VITE_FIREBASE_*` values are public Firebase browser configuration. Firebase Admin, Cloudinary, and `CRON_SECRET` values are server-only and must never be prefixed with `VITE_`, committed, or exposed to a Super Admin browser session.
 
-Client-safe: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`.
-
-Optional: `CRON_SECRET`. Emulator-only: `VITE_USE_FIREBASE_EMULATORS`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST`, `GCLOUD_PROJECT`. Never expose server secrets in `VITE_*` or commit values.
+Production Functions use Node 24 and `NODE_OPTIONS=--experimental-require-module`; both non-secret runtime values are canonical in `netlify.toml`. Netlify also stores the production server secrets. See [Environment and Scheduled Cleanup Handoff](docs/ENVIRONMENT_AND_CRON.md) for the complete inventory, CRON setup/rotation, and school-IT handoff procedure.
 
 ## Deployment and roles
 
@@ -59,3 +57,4 @@ GitHub `main` is the intended production branch and Netlify deploys it. Firestor
 - [Working Hours and Exports](docs/WORKING_HOURS_AND_EXPORTS.md)
 - [Image Security](docs/IMAGE_SECURITY.md)
 - [Audit and Reconciliation](docs/AUDIT_POLICY.md)
+- [Environment and Scheduled Cleanup Handoff](docs/ENVIRONMENT_AND_CRON.md)

@@ -1,5 +1,5 @@
 import type { Handler } from '@netlify/functions';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { adminAuth } from './firebase-admin';
 import { recordReconciliationTask } from './utils/reconciliation';
@@ -153,6 +153,8 @@ export const handler: Handler = async (event) => {
         .filter(Boolean)
         .join(' ')
         .replace(/\s+/g, ' ');
+      const imageRetentionDays = typeof settingsSnapshot.data()?.imageRetentionDays === 'number'
+        ? settingsSnapshot.data()!.imageRetentionDays : 7;
 
       transaction.create(visitorRef, {
         firstName: request.firstName,
@@ -168,6 +170,7 @@ export const handler: Handler = async (event) => {
         createdAt: FieldValue.serverTimestamp(),
         createdByUid: decoded.uid,
         imagesPurgedAt: null,
+        imagesExpireAt: Timestamp.fromMillis(Date.now() + imageRetentionDays * 86_400_000),
       });
       transaction.create(passRef, {
         visitorId: request.visitorId,

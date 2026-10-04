@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { format } from 'date-fns';
 import { ClipboardList, Download, ShieldCheck } from 'lucide-react';
-import { collection, getDocs, limit, orderBy, query, startAfter, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from 'firebase/firestore';
+import { collection, getDocs, limit, orderBy, query, startAfter, where, Timestamp, type DocumentData, type QueryConstraint, type QueryDocumentSnapshot } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { Button, DataTable, DataTableHead, DataTableRow, DataTableCell, Input, Select } from '@/components/ui';
 import { useAuth } from '@/hooks/useAuth';
@@ -49,6 +49,8 @@ export function AdminAuditLogs() {
   const [visitorEvent, setVisitorEvent] = useState('');
   const [administrativeRole, setAdministrativeRole] = useState('');
   const [administrativeAction, setAdministrativeAction] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [exporting, setExporting] = useState(false);
   const visitor = useVisitorActivity(tab === 'visitor');
   const administrative = useAdministrativeAudit(tab === 'administrative');
@@ -73,6 +75,8 @@ export function AdminAuditLogs() {
       const result = await collectCursorPages<Record<string, unknown>, QueryDocumentSnapshot<DocumentData>>(
         async (cursor, pageSize) => {
           const constraints: QueryConstraint[] = [orderBy('timestamp', 'desc')];
+          if (dateFrom) constraints.push(where('timestamp', '>=', Timestamp.fromDate(new Date(`${dateFrom}T00:00:00+08:00`))));
+          if (dateTo) constraints.push(where('timestamp', '<', Timestamp.fromDate(new Date(new Date(`${dateTo}T00:00:00+08:00`).getTime() + 86_400_000))));
           if (cursor) constraints.push(startAfter(cursor));
           constraints.push(limit(pageSize));
           const snapshot = await getDocs(query(collection(db, collectionName), ...constraints));
@@ -189,6 +193,8 @@ export function AdminAuditLogs() {
               </div>
             </>
           )}
+          <div className="w-full sm:w-44"><label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-secondary)]">From</label><Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></div>
+          <div className="w-full sm:w-44"><label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-secondary)]">To</label><Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></div>
           <Button className="sm:ml-auto" variant="secondary" loading={exporting} disabled={exporting} icon={<Download className="h-4 w-4" />} onClick={() => void exportActivity()}>
             {exporting ? 'Exporting...' : 'Export complete filtered CSV'}
           </Button>

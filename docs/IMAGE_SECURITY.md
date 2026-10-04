@@ -11,6 +11,8 @@ Milestone F keeps Cloudinary's API secret and all destructive operations in Netl
 
 The `imageUploads` collection is server-only. Each signature creates a 24-hour pending session bound to the authenticated visitor or active Kiosk identity and the exact public ID. Pass creation validates and atomically claims every upload session. Existing pass idempotency remains valid after a session has been claimed.
 
+`imageUploads.expiresAt` remains only the unclaimed-upload deadline. New visitors receive a separate `imagesExpireAt` from the configured image policy. Policy changes do not rewrite existing deadlines. Expired, missing, and temporarily unavailable images have distinct UI states while visitor/pass metadata remains readable.
+
 ## Access matrix
 
 | Actor | Pending operational image | Historical referenced image | Arbitrary/unreferenced image | Destructive access |
@@ -28,4 +30,4 @@ Failed pass creation invokes `/api/cleanup-upload`. That endpoint accepts at mos
 
 Retention purge is separate. `/api/purge-images` accepts only an authenticated Super Admin or the timing-safe `CRON_SECRET` internal caller. It processes at most 25 eligible visitor records and 25 expired pending uploads per invocation, accepts only `ok` or `not found` from Cloudinary as success, and marks a visitor purged only after all referenced deletions succeed. Partial deletion, cleanup failure, or audit failure creates a reconciliation task and returns explicit partial/reconciliation information.
 
-There is intentionally no generic image DELETE endpoint and no unauthenticated or unrestricted cleanup endpoint. The current Netlify configuration does not schedule the purge function; an authorized Super Admin must run it from Settings, or deployment operations must configure an internal scheduled caller using the existing `CRON_SECRET`. The `imageUploads(status, expiresAt)` composite index must be deployed with the Firestore indexes before production orphan cleanup is used.
+There is intentionally no generic image DELETE endpoint and no unauthenticated or unrestricted cleanup endpoint. The daily Netlify retention wrapper delegates to the existing `CRON_SECRET`-protected bounded purge; an authorized Super Admin may also run it manually. Required indexes must be deployed before enabling scheduled cleanup.

@@ -33,11 +33,27 @@
       ]
     },
     {
+      "collectionGroup": "visitors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "imagesPurgedAt", "order": "ASCENDING" },
+        { "fieldPath": "imagesExpireAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "imageUploads",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reconciliationTasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     }
   ],

@@ -150,29 +150,28 @@ export const handler: Handler = async (event) => {
     // 1. Fetch settings to get retentionDays
     const settingsDoc = await db.collection('settings').doc('app').get();
     const settings = settingsDoc.data();
-    if (!settings || typeof settings.retentionDays !== 'number' || settings.retentionDays < 1) {
+    const legacyRetentionDays = typeof settings?.retentionDays === 'number' ? settings.retentionDays : 30;
+    const retentionDays = typeof settings?.imageRetentionDays === 'number' ? settings.imageRetentionDays : 7;
+    if (legacyRetentionDays < 1 || retentionDays < 1) {
       return jsonResponse(500, { error: 'Image retention settings are invalid' });
     }
-
-    const retentionDays = settings.retentionDays;
-
-    // 2. Calculate cutoff date
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-
-    const eligibleVisitors = db.collection('visitors')
+    const legacyCutoff = new Date(Date.now() - legacyRetentionDays * 86_400_000);
+    const legacyVisitors = db.collection('visitors')
       .where('imagesPurgedAt', '==', null)
-      .where('createdAt', '<=', cutoffDate);
+      .where('createdAt', '<=', legacyCutoff);
+    const scheduledVisitors = db.collection('visitors')
+      .where('imagesPurgedAt', '==', null)
+      .where('imagesExpireAt', '<=', Timestamp.now());
 
     if (isDryRun) {
-      const [countSnapshot, orphanCountSnapshot] = await Promise.all([
-        eligibleVisitors.count().get(),
+      const [legacySnapshot, scheduledSnapshot, orphanCountSnapshot] = await Promise.all([
+        legacyVisitors.limit(25).get(), scheduledVisitors.limit(25).get(),
         db.collection('imageUploads').where('status', '==', 'pending').where('expiresAt', '<=', Timestamp.now()).count().get(),
       ]);
-      const visitorsAffected = countSnapshot.data().count;
+      const visitorsAffected = new Set([...legacySnapshot.docs.filter((item) => item.data().imagesExpireAt == null).map((item) => item.id), ...scheduledSnapshot.docs.map((item) => item.id)]).size;
 
       return jsonResponse(200, {
-        message: `Would delete images for ${visitorsAffected} visitors.`,
+        message: `Would delete images for up to ${visitorsAffected} visitors in the next bounded batch.`,
         visitorsAffected,
         orphanUploadsAffected: orphanCountSnapshot.data().count,
         retentionDays,
@@ -180,14 +179,15 @@ export const handler: Handler = async (event) => {
     }
 
     // Process a bounded batch so each invocation stays within Netlify's runtime limit.
-    const snapshot = await eligibleVisitors.limit(25).get();
+    const [legacySnapshot, scheduledSnapshot] = await Promise.all([legacyVisitors.limit(25).get(), scheduledVisitors.limit(25).get()]);
+    const snapshotDocs = [...new Map([...legacySnapshot.docs.filter((item) => item.data().imagesExpireAt == null), ...scheduledSnapshot.docs].map((item) => [item.id, item])).values()].slice(0, 25);
 
     let successCount = 0;
     let failedCount = 0;
     let reconciliationCount = 0;
 
     // 4. Process each visitor
-    for (const doc of snapshot.docs) {
+    for (const doc of snapshotDocs) {
       const visitor = doc.data();
       const publicIdsToDestroy: string[] = [];
 
@@ -242,16 +242,13 @@ export const handler: Handler = async (event) => {
     }
 
     // Check how many remain
-    const remainingSnapshot = await db.collection('visitors')
-      .where('imagesPurgedAt', '==', null)
-      .where('createdAt', '<=', cutoffDate)
-      .limit(1)
-      .get();
+    const [remainingLegacy, remainingScheduled] = await Promise.all([legacyVisitors.limit(2).get(), scheduledVisitors.limit(1).get()]);
+    const hasMoreVisitors = remainingLegacy.docs.some((item) => item.data().imagesExpireAt == null) || !remainingScheduled.empty;
 
     const orphanCleanup = await cleanupExpiredUploads(db, auditActor.uid);
 
     try {
-      if (!snapshot.empty) {
+      if (snapshotDocs.length > 0) {
         await writeAdministrativeAudit(db, {
           action: 'visitor_images_purged',
           actorUid: auditActor.uid,
@@ -259,7 +256,7 @@ export const handler: Handler = async (event) => {
           targetType: 'visitor_images',
           targetId: 'retention_batch',
           result: failedCount > 0 ? 'partial' : 'success',
-          metadata: { successCount, failedCount, reconciliationCount, retentionDays, hasMore: !remainingSnapshot.empty },
+          metadata: { successCount, failedCount, reconciliationCount, retentionDays, hasMore: hasMoreVisitors },
         });
       }
       if (orphanCleanup.attempted > 0) {
@@ -298,7 +295,7 @@ export const handler: Handler = async (event) => {
         failedCount,
         orphanDeletedCount: orphanCleanup.deletedCount,
         orphanFailedCount: orphanCleanup.failedCount,
-        hasMore: !remainingSnapshot.empty || orphanCleanup.hasMore,
+        hasMore: hasMoreVisitors || orphanCleanup.hasMore,
         reconciliationRequired: true,
         reference,
       });
@@ -310,7 +307,7 @@ export const handler: Handler = async (event) => {
       failedCount,
       orphanDeletedCount: orphanCleanup.deletedCount,
       orphanFailedCount: orphanCleanup.failedCount,
-      hasMore: !remainingSnapshot.empty || orphanCleanup.hasMore,
+      hasMore: hasMoreVisitors || orphanCleanup.hasMore,
     });
   } catch (error) {
     console.error('Image purge failed', error);

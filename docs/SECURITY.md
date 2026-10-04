@@ -5,3 +5,11 @@ Frontend checks improve UX only. Firestore Rules and Netlify Functions are autho
 There is no public Super Admin bootstrap endpoint. Use the authorized manual procedure in [Super Admin Bootstrap](SUPER_ADMIN_BOOTSTRAP.md); protected updates preserve at least one active Super Admin. Devices are authenticated accounts constrained by status, type, and gate.
 
 Cloudinary destructive credentials stay server-side. A public asset ID is not authority: image access needs an authorized application reference. Trusted mutations record audit information; unresolved external partial operations create server-only reconciliation tasks. Review dependency advisories before releases; do not force upgrades or downgrades without compatibility testing.
+
+Automatic retention permanently protects bootstrap, user role/status, Admin creation/deletion, device creation/deletion/credential, and Settings-change audit actions. Only ordinary old audit events may expire. Unresolved reconciliation tasks never expire automatically.
+
+## Human identities, server credentials, and runtime configuration
+
+A Super Admin account is a privileged human identity used for authorized administration. `CRON_SECRET` is separate: it authorizes only the server-to-server scheduled cleanup path and is never a user login/password. `FIREBASE_PRIVATE_KEY` is the backend Firebase Admin credential, while `CLOUDINARY_API_SECRET` is the backend Cloudinary credential. A compromised Super Admin browser session must not reveal any of these server secrets.
+
+`AWS_LAMBDA_JS_RUNTIME=nodejs24.x` and `NODE_OPTIONS=--experimental-require-module` are runtime configuration, not secrets. They are source-controlled in `netlify.toml` because the current Node 24 / Firebase Admin dependency chain needs them. See [Environment and Scheduled Cleanup Handoff](ENVIRONMENT_AND_CRON.md).

@@ -23,7 +23,10 @@ export const handler: Handler = async (event) => {
   try {
     const actor = await requireGuardOrAdmin(event.headers.authorization || event.headers.Authorization);
     const publicId = event.queryStringParameters?.publicId;
-    await authorizeReferencedImage(getFirestore(), actor, publicId);
+    const reference = await authorizeReferencedImage(getFirestore(), actor, publicId);
+    if (reference.visitorReferences.some((item) => item.data().imagesPurgedAt != null)) {
+      return jsonResponse(410, { error: 'Image expired', code: 'image_expired' });
+    }
 
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_SECRET) {
       console.error('Image proxy is missing required Cloudinary configuration');
