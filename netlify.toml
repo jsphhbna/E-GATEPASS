@@ -7,7 +7,7 @@
   # Non-secret, source-controlled runtime compatibility settings. Netlify UI may
   # display duplicates, but do not create conflicting values there.
   SECRETS_SCAN_OMIT_PATHS = ".firebaserc"
-  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_AUTH_DOMAIN,VITE_FIREBASE_PROJECT_ID,VITE_FIREBASE_APP_ID"
+  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_AUTH_DOMAIN,VITE_FIREBASE_PROJECT_ID,VITE_FIREBASE_APP_ID,FIREBASE_PROJECT_ID"
   AWS_LAMBDA_JS_RUNTIME = "nodejs24.x"
   NODE_OPTIONS = "--experimental-require-module"
 
