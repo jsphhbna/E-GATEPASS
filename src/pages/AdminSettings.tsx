@@ -307,7 +307,7 @@ export function AdminSettings() {
         </Button>
       </div>
 
-      <div className="grid items-start gap-6 lg:grid-cols-2">
+      <div className={`grid items-start gap-6 ${canManageSecuritySettings ? 'lg:grid-cols-2' : ''}`}>
         <div className="grid content-start gap-6">
           <Card className="p-6">
           <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Campus Access Hours</h2>
@@ -376,9 +376,9 @@ export function AdminSettings() {
           <PasswordResetCard />
         </div>
 
-        <div className="grid content-start gap-6">
+        {canManageSecuritySettings && <div className="grid content-start gap-6">
           {/* Retention Policy */}
-          {canManageSecuritySettings && <Card className="p-6">
+          <Card className="p-6">
             <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Data Retention</h2>
 
             <div className="mb-8">
@@ -418,7 +418,7 @@ export function AdminSettings() {
                 </div>
               </div>
             </div>
-          </Card>}
+          </Card>
 
         {/* Visit Purposes */}
         <Card className="p-6">
@@ -548,7 +548,7 @@ export function AdminSettings() {
           </ul>
         </Card>
 
-        </div>
+        </div>}
       </div>
       
       <ConfirmModal
