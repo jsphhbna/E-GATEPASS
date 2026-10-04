@@ -3,29 +3,26 @@ import {
   collection,
   query,
   getDocs,
-  doc,
-  setDoc,
-  serverTimestamp,
-  updateDoc,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { FirebaseApp, initializeApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, sendEmailVerification, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { Plus } from 'lucide-react';
-import { Button, FormField, Input, StatusBadge, DataTable, DataTableHead, DataTableRow, DataTableCell, Modal, ConfirmModal } from '@/components/ui';
+import { Button, FormField, Input, Select, StatusBadge, DataTable, DataTableHead, DataTableRow, DataTableCell, Modal, ConfirmModal } from '@/components/ui';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { AppUser } from '@/types';
+import { PASSWORD_MIN_LENGTH } from '@/lib/passwordPolicy';
+import { useAuth } from '@/hooks/useAuth';
+import { formatUserRole, isSuperAdmin } from '@/lib/permissions';
 
 // Use same config as primary app
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
@@ -39,7 +36,10 @@ try {
 const userSchema = z.object({
   name: z.string().min(2, 'Name is required').max(50),
   email: z.string().email('Valid email required'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string()
+    .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`)
+    .regex(/[A-Za-z]/, 'Password must include at least one letter')
+    .regex(/\d/, 'Password must include at least one number'),
   role: z.enum({ admin: 'admin', guard: 'guard' }, {
     message: 'Select a valid role',
   }),
@@ -51,11 +51,15 @@ interface AppUserWithId extends AppUser {
 }
 
 export function AdminUsers() {
+  const { uid, role } = useAuth();
+  const canManageAdministrativeRoles = isSuperAdmin(role);
   const [users, setUsers] = useState<AppUserWithId[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [deactivatingUser, setDeactivatingUser] = useState<AppUserWithId | null>(null);
   const [isDeactivating, setIsDeactivating] = useState(false);
+  const [roleChange, setRoleChange] = useState<{ user: AppUserWithId; newRole: AppUser['role'] } | null>(null);
+  const [isChangingRole, setIsChangingRole] = useState(false);
 
   const {
     register,
@@ -90,41 +94,41 @@ export function AdminUsers() {
   }, []);
 
   async function onSubmit(data: UserFormData) {
+    if (!canManageAdministrativeRoles && data.role !== 'guard') {
+      toast.error('Admins may only create Guard accounts');
+      return;
+    }
     if (!secondaryApp) {
       toast.error('Secondary app not initialized');
       return;
     }
 
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Your session has expired. Please sign in again.');
+
+      const response = await fetch('/api/create-user', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(result?.error || 'Failed to create user');
+
       const secondaryAuth = getAuth(secondaryApp);
-      // Create user in Auth (this won't sign out the admin in the primary app)
-      const userCredential = await createUserWithEmailAndPassword(
-        secondaryAuth,
-        data.email,
-        data.password
-      );
-
-      const uid = userCredential.user.uid;
-
       let emailSent = false;
       try {
-        const { sendEmailVerification } = await import('firebase/auth');
+        const userCredential = await signInWithEmailAndPassword(secondaryAuth, data.email, data.password);
         await sendEmailVerification(userCredential.user);
         emailSent = true;
-      } catch (emailErr: any) {
+      } catch (emailErr) {
         console.error('Email verification error:', emailErr);
+      } finally {
+        await signOut(secondaryAuth).catch(() => undefined);
       }
-
-      // Create user doc in Firestore
-      await setDoc(doc(db, 'users', uid), {
-        name: data.name,
-        email: data.email,
-        role: data.role,
-        active: true,
-        privacyAcceptedAt: null,
-        mustChangePassword: data.role === 'guard',
-        createdAt: serverTimestamp(),
-      });
 
       if (emailSent) {
         toast.success(`${data.role} account created. Verification email sent!`);
@@ -134,16 +138,39 @@ export function AdminUsers() {
       setIsCreating(false);
       reset();
       loadUsers();
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to create user');
+      toast.error(err instanceof Error ? err.message : 'Failed to create user');
     }
+  }
+
+  async function updateUserAccount(targetUid: string, update: { role?: AppUser['role']; active?: boolean }) {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+
+    const response = await fetch('/api/update-user', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ targetUid, ...update }),
+    });
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) {
+      throw new Error(body?.error || 'Failed to update user account');
+    }
+  }
+
+  function canManageAccount(user: AppUserWithId): boolean {
+    if (user.uid === uid) return false;
+    return canManageAdministrativeRoles || (role === 'admin' && user.role === 'guard');
   }
 
   async function handleDeactivate(user: AppUserWithId) {
     setIsDeactivating(true);
     try {
-      await updateDoc(doc(db, 'users', user.uid), { active: false });
+      await updateUserAccount(user.uid, { active: false });
       toast.success('User deactivated successfully');
       setDeactivatingUser(null);
       loadUsers();
@@ -161,7 +188,7 @@ export function AdminUsers() {
     } else {
       // Reactivate instantly
       try {
-        await updateDoc(doc(db, 'users', user.uid), { active: true });
+        await updateUserAccount(user.uid, { active: true });
         toast.success('User activated successfully');
         loadUsers();
       } catch (err) {
@@ -169,6 +196,28 @@ export function AdminUsers() {
         toast.error('Failed to update user status');
       }
     }
+  }
+
+  async function handleRoleChange() {
+    if (!roleChange) return;
+    setIsChangingRole(true);
+    try {
+      await updateUserAccount(roleChange.user.uid, { role: roleChange.newRole });
+      toast.success(`${roleChange.user.name} is now ${formatUserRole(roleChange.newRole)}`);
+      setRoleChange(null);
+      await loadUsers();
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : 'Failed to change user role');
+    } finally {
+      setIsChangingRole(false);
+    }
+  }
+
+  function roleOptionsFor(user: AppUserWithId): AppUser['role'][] {
+    if (user.role === 'guard') return ['guard', 'admin'];
+    if (user.role === 'admin') return ['guard', 'admin', 'superadmin'];
+    return ['admin', 'superadmin'];
   }
 
   return (
@@ -179,7 +228,7 @@ export function AdminUsers() {
             User Management
           </h1>
           <p className="text-sm text-[var(--color-text-secondary)]">
-            Manage guard and admin accounts
+            Manage Guard accounts{canManageAdministrativeRoles ? ' and administrative roles' : ''}
           </p>
         </div>
         <Button onClick={() => setIsCreating(true)} icon={<Plus className="h-4 w-4" />}>
@@ -198,30 +247,30 @@ export function AdminUsers() {
         size="sm"
       >
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-          <FormField label="Name" error={errors.name?.message}>
-            <Input type="text" {...register('name')} error={!!errors.name} />
+          <FormField label="Name" id="new-user-name" error={errors.name?.message}>
+            <Input id="new-user-name" type="text" {...register('name')} error={!!errors.name} />
           </FormField>
 
-          <FormField label="Email" error={errors.email?.message}>
-            <Input type="email" {...register('email')} error={!!errors.email} />
+          <FormField label="Email" id="new-user-email" error={errors.email?.message}>
+            <Input id="new-user-email" type="email" {...register('email')} error={!!errors.email} />
           </FormField>
 
-          <FormField label="Password" error={errors.password?.message}>
-            <Input type="password" {...register('password')} error={!!errors.password} />
+          <FormField label="Password" id="new-user-password" error={errors.password?.message}>
+            <Input id="new-user-password" type="password" minLength={PASSWORD_MIN_LENGTH} autoComplete="new-password" {...register('password')} error={!!errors.password} />
+            <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+              At least {PASSWORD_MIN_LENGTH} characters with a letter and a number.
+            </p>
           </FormField>
 
-          <FormField label="Role" error={errors.role?.message}>
-            <select 
+          <FormField label="Role" id="new-user-role" error={errors.role?.message}>
+            <Select
+              id="new-user-role"
               {...register('role')} 
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent"
-              style={{
-                borderColor: errors.role ? 'var(--color-danger)' : 'var(--color-border)',
-                color: 'var(--color-text-primary)',
-              }}
+              error={!!errors.role}
             >
               <option value="guard">Guard</option>
-              <option value="admin">Admin</option>
-            </select>
+              {canManageAdministrativeRoles && <option value="admin">Admin</option>}
+            </Select>
           </FormField>
 
           <Button type="submit" disabled={isSubmitting} className="w-full" loading={isSubmitting}>
@@ -232,7 +281,7 @@ export function AdminUsers() {
 
       {loading ? (
         <div className="flex h-32 items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-brand)]" />
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-brand)]" role="status" aria-label="Loading users" />
         </div>
       ) : (
         <DataTable>
@@ -252,24 +301,45 @@ export function AdminUsers() {
                 <DataTableCell className="text-[var(--color-text-secondary)]">{user.email}</DataTableCell>
                 <DataTableCell>
                   <StatusBadge 
-                    status={user.role === 'admin' ? 'issued' : 'pending'} 
-                    label={user.role} 
+                    status={user.role}
+                    label={formatUserRole(user.role)}
                   />
                 </DataTableCell>
                 <DataTableCell>
                   <StatusBadge 
-                    status={user.active ? 'inside' : 'rejected'} 
+                    status={user.active ? 'active' : 'inactive'}
                     label={user.active ? 'Active' : 'Deactivated'} 
                   />
                 </DataTableCell>
                 <DataTableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    onClick={() => toggleStatus(user)}
-                    className="text-[var(--color-brand)] hover:bg-[var(--color-brand-light)]"
-                  >
-                    {user.active ? 'Deactivate' : 'Activate'}
-                  </Button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {canManageAdministrativeRoles && user.uid !== uid && (
+                      <Select
+                        value={user.role}
+                        onChange={(event) => {
+                          const newRole = event.target.value as AppUser['role'];
+                          if (newRole !== user.role) setRoleChange({ user, newRole });
+                        }}
+                        aria-label={`Change role for ${user.name}`}
+                        className="min-h-9 w-auto py-1 text-xs"
+                      >
+                        {roleOptionsFor(user).map((option) => (
+                          <option key={option} value={option}>{formatUserRole(option)}</option>
+                        ))}
+                      </Select>
+                    )}
+                    {canManageAccount(user) ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => toggleStatus(user)}
+                        className="text-[var(--color-brand)] hover:bg-[var(--color-brand-light)]"
+                      >
+                        {user.active ? 'Deactivate' : 'Activate'}
+                      </Button>
+                    ) : user.uid === uid ? (
+                      <span className="text-xs font-medium text-[var(--color-text-muted)]">Current account</span>
+                    ) : null}
+                  </div>
                 </DataTableCell>
               </DataTableRow>
             ))}
@@ -300,6 +370,20 @@ export function AdminUsers() {
         confirmText="Deactivate"
         isDestructive
         loading={isDeactivating}
+      />
+
+      <ConfirmModal
+        isOpen={!!roleChange}
+        onClose={() => setRoleChange(null)}
+        title="Change User Role?"
+        description={roleChange ? (
+          <>
+            Change <strong className="text-[var(--color-text-primary)]">{roleChange.user.name}</strong> from {formatUserRole(roleChange.user.role)} to {formatUserRole(roleChange.newRole)}? This changes their access immediately.
+          </>
+        ) : ''}
+        onConfirm={handleRoleChange}
+        confirmText="Change Role"
+        loading={isChangingRole}
       />
     </div>
   );

@@ -1,6 +1,9 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
-import { adminAuth } from './firebase-admin';
+import crypto from 'crypto';
+import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { handleAuthError } from './utils/auth';
+import { requireImageUploadActor } from './utils/image-security';
 
 // Configure Cloudinary using server-only env vars
 cloudinary.config({
@@ -20,37 +23,63 @@ export const handler: Handler = async (event) => {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
+  if ((event.body?.length || 0) > 1024) {
+    return { statusCode: 413, body: JSON.stringify({ error: 'Request body is too large' }) };
+  }
+
   try {
     // Verify Firebase auth token (allows anonymous visitors and device accounts)
-    const authHeader = event.headers.authorization || event.headers.Authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return { statusCode: 401, body: JSON.stringify({ error: 'Missing or invalid token' }) };
-    }
-
-    const token = authHeader.split('Bearer ')[1]!;
-    await adminAuth.verifyIdToken(token);
+    const actor = await requireImageUploadActor(event.headers.authorization || event.headers.Authorization);
 
     // Parse and validate the requested folder
-    const body = event.body ? JSON.parse(event.body) : {};
-    const requestedFolder: string = body.folder || '';
+    let body: unknown;
+    try {
+      body = event.body ? JSON.parse(event.body) : {};
+    } catch {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
+    }
+    if (typeof body !== 'object' || body === null || Object.keys(body).some((key) => key !== 'folder')) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
+    }
+    const requestedFolder = 'folder' in body && typeof body.folder === 'string' ? body.folder : '';
 
     if (!ALLOWED_FOLDERS.includes(requestedFolder as typeof ALLOWED_FOLDERS[number])) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid folder requested' }) };
     }
 
-    // Generate Cloudinary signature with a fixed, server-controlled parameter set.
-    // Only timestamp and folder are signed — the client cannot inject arbitrary
-    // Cloudinary parameters (transformations, tags, etc.) into the signature.
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      console.error('Cloudinary signing is missing required configuration');
+      return { statusCode: 500, body: JSON.stringify({ error: 'Image upload is not configured' }) };
+    }
+
+    // Generate a signature over a fixed, server-controlled parameter set. The
+    // client cannot replace the folder, public ID, ownership context, or add
+    // arbitrary signed transformations/tags.
     const timestamp = Math.round(new Date().getTime() / 1000);
+    const uploadId = crypto.randomUUID().replace(/-/g, '');
+    const expectedPublicId = `${requestedFolder}/${uploadId}`;
+    const context = `egatepass_owner=${actor.uid}|egatepass_upload=${uploadId}`;
     const paramsToSign = {
       timestamp,
       folder: requestedFolder,
+      public_id: uploadId,
+      context,
     };
 
     const signature = cloudinary.utils.api_sign_request(
       paramsToSign,
-      process.env.CLOUDINARY_API_SECRET!
+      process.env.CLOUDINARY_API_SECRET
     );
+
+    await getFirestore().collection('imageUploads').doc(uploadId).create({
+      ownerUid: actor.uid,
+      actorType: actor.type,
+      folder: requestedFolder,
+      publicId: expectedPublicId,
+      status: 'pending',
+      createdAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000),
+    });
 
     return {
       statusCode: 200,
@@ -60,14 +89,14 @@ export const handler: Handler = async (event) => {
         signature,
         apiKey: process.env.CLOUDINARY_API_KEY,
         cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        uploadId,
+        uploadPublicId: uploadId,
+        expectedPublicId,
+        context,
       }),
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Cloudinary Sign Error:', error);
-    return {
-      statusCode: 403,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Authentication failed or internal error', details: error.message }),
-    };
+    return handleAuthError(error);
   }
 };

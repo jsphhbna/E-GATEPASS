@@ -1,222 +1,182 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import {
-  collection,
-  query,
-  where,
-  getDocs,
-  getCountFromServer,
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameDay,
+  isSameMonth,
+  isToday,
+  startOfMonth,
+  startOfWeek,
+} from 'date-fns';
 import {
-  Users,
-  Clock,
-  ArrowRightCircle,
+  AlertCircle,
   ArrowLeftCircle,
+  ArrowRightCircle,
+  Ban,
+  Clock,
+  MapPin,
+  MessageSquareText,
+  RefreshCw,
+  Sparkles,
+  Users,
 } from 'lucide-react';
-import { startOfDay, endOfDay, subDays, format } from 'date-fns';
-import { Card, StatCard } from '@/components/ui';
+import { Button, Card, Skeleton, StatCard } from '@/components/ui';
+import { DashboardExportActions } from '@/components/DashboardExportActions';
+import {
+  refreshAdminDashboardData,
+  useAdminDashboardData,
+} from '@/hooks/useAdminDashboardData';
+import type { GatePass } from '@/types';
 
-export function AdminDashboard() {
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({
-    todayTotal: 0,
-    todayInside: 0,
-    todayExited: 0,
-    todayRejected: 0,
-    todayPending: 0,
-    avgDecisionTime: '—',
+function mostCommon(values: Array<string | null | undefined>): { label: string; count: number } {
+  const counts = new Map<string, number>();
+  values.forEach((value) => {
+    const normalized = value?.trim();
+    if (normalized) counts.set(normalized, (counts.get(normalized) || 0) + 1);
   });
 
-  const [historicalData, setHistoricalData] = useState<{ date: string; count: number }[]>([]);
+  let result = { label: 'No data yet', count: 0 };
+  counts.forEach((count, label) => {
+    if (count > result.count) result = { label, count };
+  });
+  return result;
+}
 
-  useEffect(() => {
-    async function loadDashboardData() {
-      setLoading(true);
-      try {
-        const now = new Date();
-        const startToday = startOfDay(now);
-        const endToday = endOfDay(now);
+function averageApprovalTime(passes: GatePass[]): string {
+  const durations = passes.flatMap((pass) => {
+    if (!pass.scannedAt || !pass.timeIn) return [];
+    const duration = pass.timeIn.toMillis() - pass.scannedAt.toMillis();
+    return duration >= 0 ? [duration] : [];
+  });
+  if (durations.length === 0) return '—';
 
-        const passesRef = collection(db, 'gatePasses');
+  const averageSeconds = Math.round(
+    durations.reduce((total, duration) => total + duration, 0) / durations.length / 1000
+  );
+  return averageSeconds < 60 ? `${averageSeconds}s` : `${Math.round(averageSeconds / 60)}m`;
+}
 
-        // Total today
-        const qToday = query(
-          passesRef,
-          where('issuedAt', '>=', startToday),
-          where('issuedAt', '<=', endToday)
-        );
-        const todaySnap = await getCountFromServer(qToday);
-        const todayTotal = todaySnap.data().count;
+export function AdminDashboard() {
+  const dashboard = useAdminDashboardData();
+  const metrics = useMemo(() => {
+    const today = new Date();
+    const todayPasses = dashboard.recentPasses.filter((pass) => isSameDay(pass.issuedAt.toDate(), today));
+    const pendingToday = dashboard.decisionsTodayPasses.filter((pass) => pass.status === 'pending');
+    const rejectedToday = dashboard.decisionsTodayPasses.filter((pass) => pass.status === 'rejected');
 
-        // By Status today
-        const [insideSnap, exitedSnap, rejectedSnap, pendingSnap, insideDocsSnap] = await Promise.all([
-          getCountFromServer(
-            query(passesRef, where('status', '==', 'inside'), where('issuedAt', '>=', startToday))
-          ),
-          getCountFromServer(
-            query(passesRef, where('status', '==', 'exited'), where('timeIn', '>=', startToday)) // approximation
-          ),
-          getCountFromServer(
-            query(passesRef, where('status', '==', 'rejected'), where('issuedAt', '>=', startToday))
-          ),
-          getCountFromServer(
-            query(passesRef, where('status', '==', 'pending'), where('issuedAt', '>=', startToday))
-          ),
-          getDocs(
-            query(passesRef, where('status', '==', 'inside'), where('issuedAt', '>=', startToday))
-          ),
-        ]);
+    return {
+      todayTotal: todayPasses.length,
+      currentlyInside: dashboard.insidePasses.length,
+      exitedToday: dashboard.exitedTodayPasses.length,
+      pendingToday: pendingToday.length,
+      rejectedToday: rejectedToday.length,
+      avgApprovalTime: averageApprovalTime(dashboard.decisionsTodayPasses),
+      topPurpose: mostCommon(todayPasses.map((pass) => pass.purpose?.split(' — ')[0]?.trim())),
+      topRejection: mostCommon(rejectedToday.map((pass) => pass.rejectionReason)),
+      busiestGate: mostCommon(dashboard.decisionsTodayPasses.map((pass) => pass.gate)),
+      calendarPasses: dashboard.recentPasses,
+    };
+  }, [dashboard]);
 
-        let totalDecisionTimeMs = 0;
-        let decisionCount = 0;
+  const exportSummary = {
+    visitorsToday: metrics.todayTotal,
+    currentlyInside: metrics.currentlyInside,
+    exitedToday: metrics.exitedToday,
+    pendingApproval: metrics.pendingToday,
+    rejectedToday: metrics.rejectedToday,
+    insights: [
+      {
+        title: 'Top Visit Purpose',
+        value: metrics.topPurpose.label,
+        count: metrics.topPurpose.count,
+        description: 'Most common reason visitors gave when requesting a pass.',
+      },
+      {
+        title: 'Top Rejection Reason',
+        value: metrics.topRejection.label,
+        count: metrics.topRejection.count,
+        description: 'Most common reason among visitors scanned today who were rejected.',
+      },
+      {
+        title: 'Busiest Entry Gate',
+        value: metrics.busiestGate.label,
+        count: metrics.busiestGate.count,
+        description: 'Gate with the most visitor scans recorded today.',
+      },
+    ],
+  };
 
-        const insideDocs = insideDocsSnap.docs;
-        insideDocs.forEach((d: any) => {
-          const pass = d.data();
-          if (pass.timeIn && pass.scannedAt) {
-            totalDecisionTimeMs += (pass.timeIn.toMillis() - pass.scannedAt.toMillis());
-            decisionCount++;
-          }
-        });
+  if (dashboard.loading) return <DashboardSkeleton />;
 
-        let avgDecisionTime = '—';
-        if (decisionCount > 0) {
-          const avgSec = Math.round(totalDecisionTimeMs / decisionCount / 1000);
-          avgDecisionTime = avgSec < 60 ? `${avgSec}s` : `${Math.round(avgSec/60)}m`;
-        }
-
-        setStats({
-          todayTotal,
-          todayInside: insideSnap.data().count,
-          todayExited: exitedSnap.data().count,
-          todayRejected: rejectedSnap.data().count,
-          todayPending: pendingSnap.data().count,
-          avgDecisionTime,
-        });
-
-        // Historical Data (Last 7 Days)
-        const history = [];
-        for (let i = 6; i >= 0; i--) {
-          const targetDay = subDays(now, i);
-          const start = startOfDay(targetDay);
-          const end = endOfDay(targetDay);
-
-          const qDay = query(
-            passesRef,
-            where('issuedAt', '>=', start),
-            where('issuedAt', '<=', end)
-          );
-          
-          const daySnap = await getCountFromServer(qDay);
-          history.push({
-            date: format(targetDay, 'MMM dd'),
-            count: daySnap.data().count,
-          });
-        }
-        setHistoricalData(history);
-
-      } catch (err) {
-        console.error('Error loading dashboard:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadDashboardData();
-  }, []);
-
-  if (loading) {
+  if (dashboard.error) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-brand)] border-t-transparent"></div>
-      </div>
+      <Card className="mx-auto mt-12 max-w-lg text-center">
+        <AlertCircle className="mx-auto h-10 w-10 text-[var(--color-danger)]" aria-hidden="true" />
+        <h1 className="mt-4 text-xl font-bold text-[var(--color-text-primary)]">Dashboard unavailable</h1>
+        <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{dashboard.error}</p>
+        <Button onClick={refreshAdminDashboardData} icon={<RefreshCw className="h-4 w-4" />} className="mt-5">
+          Try Again
+        </Button>
+      </Card>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
-          Dashboard
-        </h1>
-        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-          Overview of today's campus visitor activity
-        </p>
-      </div>
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Dashboard</h1>
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+            A live overview of campus visitor activity and guard decisions.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-success)]" aria-live="polite">
+            <span className="h-2 w-2 rounded-full bg-[var(--color-success)]" aria-hidden="true" />
+            Live updates
+            {dashboard.updatedAt && (
+              <span className="text-[var(--color-text-muted)]">· Updated {format(dashboard.updatedAt, 'h:mm a')}</span>
+            )}
+          </div>
+          <DashboardExportActions passes={metrics.calendarPasses} summary={exportSummary} />
+        </div>
+      </header>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Total Visitors Today"
-          value={stats.todayTotal}
-          icon={<Users className="h-5 w-5 text-[var(--color-brand)]" />}
-        />
-        <StatCard
-          title="Currently Inside"
-          value={stats.todayInside}
-          icon={<ArrowRightCircle className="h-5 w-5 text-[var(--color-success)]" />}
-          trend={`${stats.todayInside} visitors`}
-          trendUp={true}
-        />
-        <StatCard
-          title="Exited"
-          value={stats.todayExited}
-          icon={<ArrowLeftCircle className="h-5 w-5 text-[var(--color-text-secondary)]" />}
-        />
-        <StatCard
-          title="Pending Approval"
-          value={stats.todayPending}
-          icon={<Clock className="h-5 w-5 text-[var(--color-warning)]" />}
-        />
-      </div>
+      <section aria-labelledby="visitor-stats-heading">
+        <h2 id="visitor-stats-heading" className="sr-only">Visitor statistics</h2>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <StatCard title="Visitors Today" value={metrics.todayTotal} icon={<Users className="h-5 w-5 text-[var(--color-brand)]" />} description="Passes created since midnight." />
+          <StatCard title="Currently Inside" value={metrics.currentlyInside} icon={<ArrowRightCircle className="h-5 w-5 text-[var(--color-success)]" />} description="All approved visitors who have not exited." />
+          <StatCard title="Exited Today" value={metrics.exitedToday} icon={<ArrowLeftCircle className="h-5 w-5 text-[var(--color-text-secondary)]" />} description="Visits with an exit time recorded today." />
+          <StatCard title="Pending Approval" value={metrics.pendingToday} icon={<Clock className="h-5 w-5 text-[var(--color-warning)]" />} description="Visitors scanned today and waiting for a guard." />
+          <StatCard title="Rejected Today" value={metrics.rejectedToday} icon={<Ban className="h-5 w-5 text-[var(--color-danger)]" />} description="Visitors scanned today whose entry was rejected." />
+          <StatCard title="Avg Approval Time" value={metrics.avgApprovalTime} icon={<Sparkles className="h-5 w-5 text-[var(--color-brand)]" />} description="Average wait from scan to approval for visitors scanned today." />
+        </div>
+      </section>
+
+      <section aria-labelledby="insights-heading">
+        <div className="mb-3">
+          <h2 id="insights-heading" className="text-lg font-bold text-[var(--color-text-primary)]">Today's Insights</h2>
+          <p className="text-sm text-[var(--color-text-secondary)]">The most common activity recorded today.</p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          <InsightCard icon={<MessageSquareText className="h-5 w-5" />} title="Top Visit Purpose" insight={metrics.topPurpose} description="Most common reason visitors gave when requesting a pass." />
+          <InsightCard icon={<Ban className="h-5 w-5" />} title="Top Rejection Reason" insight={metrics.topRejection} description="Most common reason among visitors scanned today who were rejected." />
+          <InsightCard icon={<MapPin className="h-5 w-5" />} title="Busiest Entry Gate" insight={metrics.busiestGate} description="Gate with the most visitor scans recorded today." />
+        </div>
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Simple Bar Chart for last 7 days */}
+        <IssuedPassesCalendar passes={metrics.calendarPasses} />
         <Card className="p-6">
-          <h2 className="mb-6 text-xl font-bold text-[var(--color-text-primary)]">
-            Last 7 Days (Issued Passes)
-          </h2>
-          <div className="flex h-48 items-end gap-3 px-2">
-            {historicalData.map((data, i) => {
-              const max = Math.max(...historicalData.map(d => d.count), 10); // min height baseline
-              const height = `${(data.count / max) * 100}%`;
-              return (
-                <div key={i} className="flex flex-1 flex-col items-center justify-end group">
-                  <div 
-                    className="w-full max-w-[48px] rounded-t-md transition-all duration-300 group-hover:opacity-80 group-hover:scale-y-105 origin-bottom shadow-sm"
-                    style={{ height, backgroundColor: 'var(--color-brand)' }}
-                    title={`${data.count} passes`}
-                  />
-                  <span className="mt-3 text-[11px] font-medium text-[var(--color-text-muted)]">
-                    {data.date.split(' ')[1]}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-
-        {/* Quick Actions / Summary */}
-        <Card className="p-6">
-           <h2 className="mb-6 text-xl font-bold text-[var(--color-text-primary)]">
-            Today's Summary
-          </h2>
-          <div className="space-y-5">
-             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
-               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Approved & Inside</span>
-               <span className="font-bold text-lg text-[var(--color-success)]">{stats.todayInside}</span>
-             </div>
-             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
-               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Completed Visits</span>
-               <span className="font-bold text-lg text-[var(--color-text-primary)]">{stats.todayExited}</span>
-             </div>
-             <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-3">
-               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Rejected</span>
-               <span className="font-bold text-lg text-[var(--color-danger)]">{stats.todayRejected}</span>
-             </div>
-             <div className="flex items-center justify-between pt-1">
-               <span className="text-sm font-medium text-[var(--color-text-secondary)]">Avg Decision Time</span>
-               <span className="font-bold text-lg text-[var(--color-brand)]">{stats.avgDecisionTime}</span>
-             </div>
+          <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Operational Summary</h2>
+          <div className="space-y-4">
+            <SummaryRow label="Approved and currently inside" value={metrics.currentlyInside} color="text-[var(--color-success)]" />
+            <SummaryRow label="Completed visits today" value={metrics.exitedToday} />
+            <SummaryRow label="Waiting for approval" value={metrics.pendingToday} color="text-[var(--color-warning)]" />
+            <SummaryRow label="Rejected after scanning today" value={metrics.rejectedToday} color="text-[var(--color-danger)]" last />
           </div>
         </Card>
       </div>
@@ -224,3 +184,82 @@ export function AdminDashboard() {
   );
 }
 
+function InsightCard({ icon, title, insight, description }: { icon: React.ReactNode; title: string; insight: { label: string; count: number }; description: string }) {
+  return (
+    <Card className="h-full p-5">
+      <div className="flex items-center gap-2 text-[var(--color-brand)]">{icon}<h3 className="text-sm font-bold">{title}</h3></div>
+      <p className="mt-3 break-words text-xl font-bold text-[var(--color-text-primary)]">{insight.label}</p>
+      <p className="mt-1 text-xs font-semibold text-[var(--color-text-secondary)]">{insight.count > 0 ? `${insight.count} record${insight.count === 1 ? '' : 's'}` : 'No records today'}</p>
+      <p className="mt-3 text-xs leading-relaxed text-[var(--color-text-muted)]">{description}</p>
+    </Card>
+  );
+}
+
+function IssuedPassesCalendar({ passes }: { passes: GatePass[] }) {
+  const month = new Date();
+  const monthStart = startOfMonth(month);
+  const monthEnd = endOfMonth(month);
+  const calendarDays = eachDayOfInterval({
+    start: startOfWeek(monthStart),
+    end: endOfWeek(monthEnd),
+  });
+  const countsByDate = new Map<string, number>();
+
+  passes.forEach((pass) => {
+    const issuedDate = pass.issuedAt.toDate();
+    if (!isSameMonth(issuedDate, month)) return;
+    const key = format(issuedDate, 'yyyy-MM-dd');
+    countsByDate.set(key, (countsByDate.get(key) || 0) + 1);
+  });
+
+  return (
+    <Card className="p-6">
+      <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Passes Issued Calendar</h2>
+      <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+        {format(month, 'MMMM yyyy')} — each day shows the number of visitor passes created.
+      </p>
+      <div className="mt-5 grid grid-cols-7 gap-1" role="grid" aria-label={`Visitor passes issued in ${format(month, 'MMMM yyyy')}`}>
+        {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => (
+          <div key={day} role="columnheader" className="pb-1 text-center text-xs font-bold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <span className="sm:hidden">{day.charAt(0)}</span>
+            <span className="hidden sm:inline">{day.slice(0, 3)}</span>
+          </div>
+        ))}
+        {calendarDays.map((day) => {
+          const key = format(day, 'yyyy-MM-dd');
+          const count = countsByDate.get(key) || 0;
+          const inCurrentMonth = isSameMonth(day, month);
+          const currentDay = isToday(day);
+
+          return (
+            <div
+              key={key}
+              role="gridcell"
+              aria-label={`${format(day, 'MMMM d, yyyy')}: ${count} ${count === 1 ? 'pass' : 'passes'} issued`}
+              className={`flex h-20 min-w-0 flex-col rounded-md border p-1.5 sm:h-24 sm:p-2 ${
+                inCurrentMonth ? 'border-[var(--color-border)] bg-white' : 'border-transparent bg-[var(--color-canvas)] text-[var(--color-text-muted)]'
+              } ${currentDay ? 'ring-2 ring-[var(--color-brand)] ring-offset-1' : ''}`}
+            >
+              <span className={`text-xs font-bold sm:text-sm ${inCurrentMonth ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
+                {format(day, 'd')}
+              </span>
+              <span className={`mt-auto rounded px-1 py-0.5 text-center text-xs font-semibold ${
+                count > 0 && inCurrentMonth ? 'bg-[var(--color-brand-light)] text-[var(--color-brand)]' : 'text-[var(--color-text-muted)]'
+              }`}>
+                {inCurrentMonth ? `${count} ${count === 1 ? 'pass' : 'passes'}` : ''}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function SummaryRow({ label, value, color = 'text-[var(--color-text-primary)]', last = false }: { label: string; value: number; color?: string; last?: boolean }) {
+  return <div className={`flex items-center justify-between gap-4 pb-3 ${last ? '' : 'border-b border-[var(--color-border)]'}`}><span className="text-sm font-medium text-[var(--color-text-secondary)]">{label}</span><span className={`text-lg font-bold ${color}`}>{value}</span></div>;
+}
+
+function DashboardSkeleton() {
+  return <div className="space-y-6" aria-label="Loading dashboard"><div><Skeleton className="h-8 w-40" /><Skeleton className="mt-2 h-4 w-72 max-w-full" /></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-36" />)}</div><div className="grid gap-4 md:grid-cols-3">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-40" />)}</div></div>;
+}

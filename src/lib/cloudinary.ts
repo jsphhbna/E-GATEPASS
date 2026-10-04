@@ -5,7 +5,12 @@ interface SignatureResponse {
   signature: string;
   apiKey: string;
   cloudName: string;
+  uploadPublicId: string;
+  expectedPublicId: string;
+  context: string;
 }
+
+type UploadFolder = 'e-gatepass/photos' | 'e-gatepass/ids';
 
 /**
  * Compresses an image to WebP format using an off-screen canvas.
@@ -69,7 +74,7 @@ export async function compressImageToWebP(file: File): Promise<Blob> {
 /**
  * Uploads a file directly to Cloudinary using a signed request from our Netlify Function.
  */
-export async function uploadToCloudinary(fileOrBlob: File | Blob, folder = 'e-gatepass'): Promise<string> {
+export async function uploadToCloudinary(fileOrBlob: File | Blob, folder: UploadFolder): Promise<string> {
   const user = auth.currentUser;
   if (!user) {
     throw new Error('Must be authenticated to upload images');
@@ -88,12 +93,11 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder = 'e-ga
   });
 
   if (!signRes.ok) {
-    const errorText = await signRes.text().catch(() => 'No response body');
-    console.error('Cloudinary sign failed. Status:', signRes.status, 'Response:', errorText);
-    throw new Error('Failed to get upload signature: ' + errorText);
+    console.error('Cloudinary sign failed. Status:', signRes.status);
+    throw new Error('Image upload could not be authorized');
   }
 
-  const { timestamp, signature, apiKey, cloudName }: SignatureResponse = await signRes.json();
+  const { timestamp, signature, apiKey, cloudName, uploadPublicId, expectedPublicId, context }: SignatureResponse = await signRes.json();
 
   // 2. Upload directly to Cloudinary
   const formData = new FormData();
@@ -102,6 +106,8 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder = 'e-ga
   formData.append('timestamp', timestamp.toString());
   formData.append('signature', signature);
   formData.append('folder', folder);
+  formData.append('public_id', uploadPublicId);
+  formData.append('context', context);
 
   const uploadRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
     method: 'POST',
@@ -114,6 +120,26 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder = 'e-ga
     throw new Error('Failed to upload image to Cloudinary');
   }
 
-  const data = await uploadRes.json();
-  return data.public_id; // Return the public_id to store in Firestore
+  const data = await uploadRes.json() as { public_id?: unknown };
+  if (data.public_id !== expectedPublicId) throw new Error('Image upload returned an unexpected identifier');
+  return expectedPublicId;
+}
+
+export async function cleanupUploadedImages(publicIds: string[]): Promise<void> {
+  if (publicIds.length === 0) return;
+  const user = auth.currentUser;
+  if (!user) return;
+  try {
+    const token = await user.getIdToken();
+    const response = await fetch('/api/cleanup-upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicIds: [...new Set(publicIds)].slice(0, 2) }),
+    });
+    if (!response.ok && response.status !== 409) {
+      console.error('Pending image cleanup was not accepted. Status:', response.status);
+    }
+  } catch (error) {
+    console.error('Pending image cleanup request failed', error);
+  }
 }

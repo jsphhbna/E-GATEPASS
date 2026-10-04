@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import styles from './Stepper.module.css';
 
 interface Step {
   id: string;
@@ -24,26 +25,26 @@ export function Stepper({ steps, currentStepIndex, className = '', orientation =
           const isUpcoming = index > currentStepIndex;
 
           return (
-            <li key={step.id} className={`relative flex ${isVertical ? 'flex-row items-center gap-4' : 'flex-col items-center flex-1 group'}`}>
+            <li key={step.id} className={`relative flex ${isVertical ? 'flex-row items-center gap-4' : 'flex-1 flex-col items-center'}`}>
               {/* Connecting Line */}
               {index !== steps.length - 1 && (
                 <div
-                  className={`absolute -z-10 transition-colors duration-200 motion-reduce:transition-none ${
-                    isCompleted ? 'bg-[var(--color-earist-maroon)]' : 'bg-gray-200'
+                  className={`absolute z-0 transition-colors duration-200 motion-reduce:transition-none ${
+                    isCompleted ? 'bg-[var(--color-success)]' : 'bg-[var(--color-border)]'
                   } ${
                     isVertical 
-                      ? 'left-[1.15rem] sm:left-[1.25rem] top-10 h-full w-[3px] rounded-full' 
-                      : 'top-4 sm:top-5 left-1/2 w-full h-[3px] rounded-full'
+                      ? 'left-4 top-8 h-[calc(100%+1rem)] w-0.5 sm:left-5 sm:top-10'
+                      : 'left-1/2 top-4 h-0.5 w-full sm:top-5'
                   }`}
                   aria-hidden="true"
                 />
               )}
 
               <div
-                className={`relative flex h-8 w-8 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-200 motion-reduce:transition-none
-                  ${isCompleted ? 'border-[var(--color-earist-maroon)] bg-[var(--color-earist-maroon)]' : ''}
+                className={`relative z-10 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-200 motion-reduce:transition-none sm:h-10 sm:w-10
+                  ${isCompleted ? `border-[var(--color-success)] bg-[var(--color-success)] ${styles.completedStep}` : ''}
                   ${isCurrent ? 'border-[var(--color-earist-red)] bg-[var(--color-earist-red)] ring-4 ring-[var(--color-brand-light)]' : ''}
-                  ${isUpcoming ? 'border-gray-300 bg-white' : ''}
+                  ${isUpcoming ? 'border-[var(--color-border-strong)] bg-white' : ''}
                 `}
                 aria-current={isCurrent ? 'step' : undefined}
               >
@@ -55,7 +56,7 @@ export function Stepper({ steps, currentStepIndex, className = '', orientation =
                 ) : (
                   <span
                     className={`text-sm sm:text-base font-semibold 
-                      ${isCurrent ? 'text-white' : 'text-gray-500'}`}
+                      ${isCurrent ? 'text-white' : 'text-[var(--color-text-muted)]'}`}
                   >
                     {index + 1}
                   </span>
@@ -63,10 +64,10 @@ export function Stepper({ steps, currentStepIndex, className = '', orientation =
               </div>
               
               <span
-                className={`text-[10px] sm:text-xs ${isVertical ? 'text-left' : 'mt-2 sm:mt-3 text-center px-1 sm:px-0 sm:whitespace-nowrap'}
-                  ${isCompleted ? 'text-[var(--color-earist-maroon)] font-semibold' : ''}
+                className={`relative z-10 text-xs ${isVertical ? 'text-left' : 'mt-2 px-1 text-center sm:mt-3 sm:px-0 sm:whitespace-nowrap'}
+                  ${isCompleted ? 'font-semibold text-[var(--color-success)]' : ''}
                   ${isCurrent ? 'text-[var(--color-earist-red)] font-bold text-sm sm:text-base' : ''}
-                  ${isUpcoming ? 'text-gray-600 font-medium' : ''}
+                  ${isUpcoming ? 'font-medium text-[var(--color-text-secondary)]' : ''}
                 `}
               >
                 {step.title}

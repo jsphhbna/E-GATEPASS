@@ -13,7 +13,23 @@ service cloud.firestore {
       return isLoggedIn() && 
              request.auth.token.email_verified == true &&
              exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'superadmin'] &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+
+    function isSuperAdmin() {
+      return isLoggedIn() &&
+             request.auth.token.email_verified == true &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin' &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+
+    function isRegularAdmin() {
+      return isLoggedIn() &&
+             request.auth.token.email_verified == true &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
     }
     
@@ -51,25 +67,44 @@ service cloud.firestore {
     // ============================================================
 
     match /users/{userId} {
-      // Admins can read/write all. Users can read their own.
+      // Staff can read their own record; administrative roles can list users.
       allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == userId);
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
+
+      // Account creation is a privileged server operation so Auth, profile, and
+      // audit records can be coordinated without exposing role assignment.
+      allow create: if false;
+
+      // Role and activation changes are backend-only. Staff may only acknowledge
+      // the privacy policy on their own record from the client.
+      allow update: if (
         isLoggedIn() && 
         request.auth.uid == userId && 
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['privacyAcceptedAt'])
       );
+      allow delete: if false;
     }
 
     match /devices/{deviceId} {
-      // Admins can read/write all. Devices can read their own.
+      // Administrative roles can read all devices; devices can read their own.
+      // Registration and management mutations are server-only.
       allow read: if isAdmin() || (isLoggedIn() && request.auth.uid == deviceId);
-      allow write: if isAdmin();
+      allow write: if false;
+    }
+
+    // Operational repair tasks can contain sensitive server-state details.
+    match /reconciliationTasks/{taskId} {
+      allow read, write: if false;
+    }
+
+    // Upload ownership records are server-only. They cannot be forged to gain
+    // image access or to delete another actor's pending upload.
+    match /imageUploads/{uploadId} {
+      allow read, write: if false;
     }
 
     match /visitors/{visitorId} {
-      // Visitors (anonymous) can create only. Guards and Admins can read.
-      allow create: if isLoggedIn() &&
+      // Visitor/pass creation is one protected backend transaction.
+      allow create: if false && isLoggedIn() &&
                        request.resource.data.keys().hasAll(['firstName', 'middleName', 'lastName', 'fullName', 'contactNumber', 'purpose', 'visitDate', 'idImagePublicId', 'photoPublicId', 'consentAcceptedAt', 'createdAt', 'createdByUid', 'imagesPurgedAt']) &&
                        request.resource.data.keys().hasOnly(['firstName', 'middleName', 'lastName', 'fullName', 'contactNumber', 'purpose', 'visitDate', 'idImagePublicId', 'photoPublicId', 'consentAcceptedAt', 'createdAt', 'createdByUid', 'imagesPurgedAt']) &&
                        // Type validation
@@ -88,7 +123,7 @@ service cloud.firestore {
                        request.resource.data.createdByUid == request.auth.uid;
                        
       allow read: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
-      allow update: if isAdmin();
+      allow update: if false;
       allow delete: if false; // Retention purge is an update to imagesPurgedAt, not delete
     }
 
@@ -96,7 +131,7 @@ service cloud.firestore {
       // ── Creation ──
       // Portal passes: only anonymous visitors (not known users/devices)
       // Kiosk passes: only active kiosk devices
-      allow create: if 
+      allow create: if false && (
         // ── Portal source: anonymous visitor ──
         (
           isAnonymousVisitor() &&
@@ -156,14 +191,13 @@ service cloud.firestore {
           // Ownership
           request.resource.data.createdByUid == request.auth.uid &&
           get(/databases/$(database)/documents/visitors/$(request.resource.data.visitorId)).data.createdByUid == request.auth.uid
-        );
+        ));
                        
       allow get: if isAdmin() || isGuard() || isActiveDevice() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       allow list: if isAdmin() || isGuard() || (isLoggedIn() && resource.data.createdByUid == request.auth.uid);
       
       // ── Updates ──
-      allow update: if 
-        isAdmin() || 
+      allow update: if false && (
         // Entry device: issued → pending (with scanner UID ownership + type checks)
         (
           isDevice('entry') && 
@@ -193,34 +227,14 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeOut', 'exitDeviceId']) &&
           request.resource.data.timeOut is timestamp &&
           request.resource.data.exitDeviceId == request.auth.uid
-        ) ||
-        // Guard: pending → inside (approve)
-        (
-          isGuard() && 
-          resource.data.status == 'pending' &&
-          request.resource.data.decidedByUid == request.auth.uid &&
-          (
-            (
-              request.resource.data.status == 'inside' && 
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'timeIn', 'decidedByUid']) &&
-              request.resource.data.timeIn is timestamp
-            ) ||
-            // Guard: pending → rejected (with non-empty reason)
-            (
-              request.resource.data.status == 'rejected' && 
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'rejectionReason', 'decidedByUid']) &&
-              request.resource.data.rejectionReason is string &&
-              request.resource.data.rejectionReason.size() > 0
-            )
-          )
-        );
+        ));
         
       allow delete: if false;
     }
 
     match /visitLogs/{logId} {
-      // Match the scanner and guard payloads, including invalid QR codes with no visitor.
-      allow create: if isLoggedIn() &&
+      // Scanner and Guard logs are emitted only by protected backend transactions.
+      allow create: if false && isLoggedIn() &&
         request.resource.data.keys().hasAll(['passToken', 'visitorId', 'event', 'reason', 'deviceId', 'gate', 'guardUid', 'timestamp']) &&
         request.resource.data.keys().hasOnly(['passToken', 'visitorId', 'event', 'reason', 'deviceId', 'gate', 'guardUid', 'timestamp']) &&
         request.resource.data.passToken is string &&
@@ -228,7 +242,18 @@ service cloud.firestore {
         request.resource.data.timestamp is timestamp &&
         (request.resource.data.gate is string || request.resource.data.gate == null) &&
         (
-          (request.resource.data.event == 'invalid_scan' && request.resource.data.visitorId == null) ||
+          (
+            request.resource.data.event == 'invalid_scan' &&
+            (
+              request.resource.data.visitorId == null ||
+              (
+                request.resource.data.visitorId is string &&
+                request.resource.data.visitorId.size() > 0 &&
+                exists(/databases/$(database)/documents/gatePasses/$(request.resource.data.passToken)) &&
+                get(/databases/$(database)/documents/gatePasses/$(request.resource.data.passToken)).data.visitorId == request.resource.data.visitorId
+              )
+            )
+          ) ||
           (request.resource.data.event != 'invalid_scan' && request.resource.data.visitorId is string && request.resource.data.visitorId.size() > 0 && request.resource.data.passToken.size() > 0)
         ) &&
         (
@@ -243,11 +268,6 @@ service cloud.firestore {
               (isDevice('entry') && request.resource.data.event in ['scan_entry', 'invalid_scan']) ||
               (isDevice('exit') && request.resource.data.event in ['scan_exit', 'invalid_scan'])
             )
-          ) ||
-          (
-            isGuard() && request.resource.data.event in ['approved', 'rejected'] &&
-            request.resource.data.guardUid is string && request.resource.data.guardUid == request.auth.uid &&
-            request.resource.data.deviceId == null
           )
         );
       allow read: if isAdmin() || isGuard();
@@ -255,15 +275,16 @@ service cloud.firestore {
     }
 
     match /settings/app {
-      // Everyone (including anonymous) can read settings (e.g. working hours). Admins can update.
+      // Everyone can read operational settings. Security-sensitive fields are
+      // Super Admin-only; normal Admins may update daily operational options.
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if false;
     }
 
     match /auditLogs/{logId} {
-      // Admins can read and create. No one can delete.
-      allow read, create: if isAdmin();
-      allow update, delete: if false;
+      // Administrative events are server-authored and immutable.
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     // Default deny all

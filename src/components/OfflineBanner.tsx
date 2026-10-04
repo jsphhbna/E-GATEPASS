@@ -24,7 +24,7 @@ export function OfflineBanner() {
   if (!isOffline) return null;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-[200] bg-[var(--color-danger)] px-4 py-2 text-center text-sm font-semibold text-white shadow-md flex items-center justify-center gap-2 animate-in slide-in-from-top">
+    <div className="fixed left-0 right-0 top-0 z-[200] flex items-center justify-center gap-2 bg-[var(--color-danger)] px-4 py-2 text-center text-sm font-semibold text-white shadow-md motion-safe:animate-in motion-safe:slide-in-from-top" role="status" aria-live="polite">
       <WifiOff className="h-4 w-4" />
       You are currently offline. Changes will be saved locally and synced when connection is restored.
     </div>

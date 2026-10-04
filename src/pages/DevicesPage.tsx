@@ -1,29 +1,21 @@
 import { useState, useEffect } from 'react';
 import {
   collection,
-  doc,
-  setDoc,
   onSnapshot,
-  updateDoc,
-  serverTimestamp,
   query,
   orderBy,
-  addDoc,
 } from 'firebase/firestore';
-import {
-  createUserWithEmailAndPassword,
-  getAuth,
-} from 'firebase/auth';
-import { initializeApp } from 'firebase/app';
 import { auth, db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
-import type { Device, DeviceType, DeviceStatus } from '@/types';
-import { Tablet, Plus, X, Lock, Unlock, Key, Mail } from 'lucide-react';
+import type { Device, DeviceType } from '@/types';
+import { Tablet, Plus, X, Lock, Unlock, Key, AtSign, Trash2, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Button, Card, FormField, Input, StatusBadge, Modal, ConfirmModal } from '@/components/ui';
+import { Button, Card, FormField, Input, Select, StatusBadge, Modal, ConfirmModal } from '@/components/ui';
+import { isSuperAdmin } from '@/lib/permissions';
+import { getPasswordPolicyError, PASSWORD_MIN_LENGTH } from '@/lib/passwordPolicy';
 
 // ============================================================
 // TYPES AND SCHEMA
@@ -38,32 +30,21 @@ const deviceSchema = z.object({
     message: 'Select a device type',
   }),
   gate: z.string().min(1, 'Gate/location is required').max(50),
-  email: z.string().email('Valid email required'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  email: z.string().email('Username must use an email format, such as maingate-entry@earist-devices.local'),
+  password: z.string()
+    .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`)
+    .regex(/[A-Za-z]/, 'Password must include at least one letter')
+    .regex(/\d/, 'Password must include at least one number'),
 });
 
 type DeviceFormData = z.infer<typeof deviceSchema>;
 
 // ============================================================
-// SECONDARY FIREBASE APP for creating device accounts
-// without signing out the current admin
-// ============================================================
-const secondaryApp = initializeApp(
-  {
-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-    appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  },
-  'secondary'
-);
-const secondaryAuth = getAuth(secondaryApp);
-
-// ============================================================
 // COMPONENT
 // ============================================================
 export function DevicesPage() {
-  const { uid } = useAuth();
+  const { role } = useAuth();
+  const canManageCredentials = isSuperAdmin(role);
   const [devices, setDevices] = useState<DeviceWithId[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -72,7 +53,10 @@ export function DevicesPage() {
   const [editingDevice, setEditingDevice] = useState<DeviceWithId | null>(null);
   const [editEmail, setEditEmail] = useState('');
   const [editPassword, setEditPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [isUpdatingAuth, setIsUpdatingAuth] = useState(false);
+  const [deletingDevice, setDeletingDevice] = useState<DeviceWithId | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const {
     register,
@@ -102,47 +86,22 @@ export function DevicesPage() {
   async function onCreateDevice(data: DeviceFormData) {
     setCreating(true);
     try {
-      // 1. Create Firebase Auth user via secondary app (doesn't sign out admin)
-      const cred = await createUserWithEmailAndPassword(
-        secondaryAuth,
-        data.email,
-        data.password
-      );
-      const deviceUid = cred.user.uid;
-
-      // Sign out from secondary app immediately
-      await secondaryAuth.signOut();
-
-      // 2. Create Firestore device doc keyed by the new UID
-      await setDoc(doc(db, 'devices', deviceUid), {
-        name: data.name,
-        type: data.type as DeviceType,
-        gate: data.gate,
-        email: data.email,
-        status: 'active' as DeviceStatus,
-        createdBy: uid,
-        createdAt: serverTimestamp(),
-        lastSeen: null,
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Your session has expired. Please sign in again.');
+      const response = await fetch('/api/create-device', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
       });
-
-      // 3. Audit log
-      await addDoc(collection(db, 'auditLogs'), {
-        actorUid: uid,
-        action: 'device_registered',
-        target: `devices/${deviceUid}`,
-        details: `Registered ${data.type} device "${data.name}" at ${data.gate}`,
-        timestamp: serverTimestamp(),
-      });
+      const result = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(result?.error || 'Failed to register device');
 
       toast.success(`Device "${data.name}" registered successfully`);
       reset();
       setShowForm(false);
     } catch (err) {
       console.error('Device registration error:', err);
-      const message =
-        err instanceof Error && err.message.includes('email-already-in-use')
-          ? 'This email is already in use by another account.'
-          : 'Failed to register device. Please try again.';
+      const message = err instanceof Error ? err.message : 'Failed to register device. Please try again.';
       toast.error(message);
     } finally {
       setCreating(false);
@@ -158,16 +117,7 @@ export function DevicesPage() {
     } else {
       // Reactivate instantly
       try {
-        await updateDoc(doc(db, 'devices', device.id), {
-          status: 'active',
-        });
-        await addDoc(collection(db, 'auditLogs'), {
-          actorUid: uid,
-          action: 'device_reactivated',
-          target: `devices/${device.id}`,
-          details: `Reactivated device "${device.name}"`,
-          timestamp: serverTimestamp(),
-        });
+        await updateDeviceStatus(device.id, 'active');
         toast.success(`Device "${device.name}" reactivated`);
       } catch (err) {
         console.error('Reactivate device error:', err);
@@ -179,16 +129,7 @@ export function DevicesPage() {
   async function handleRevoke(device: DeviceWithId) {
     setIsRevoking(true);
     try {
-      await updateDoc(doc(db, 'devices', device.id), {
-        status: 'revoked',
-      });
-      await addDoc(collection(db, 'auditLogs'), {
-        actorUid: uid,
-        action: 'device_revoked',
-        target: `devices/${device.id}`,
-        details: `Revoked device "${device.name}"`,
-        timestamp: serverTimestamp(),
-      });
+      await updateDeviceStatus(device.id, 'revoked');
       toast.success(`Device "${device.name}" revoked`);
       setRevokingDevice(null);
     } catch (err) {
@@ -203,9 +144,22 @@ export function DevicesPage() {
     e.preventDefault();
     if (!editingDevice) return;
 
-    if (!editEmail && !editPassword) {
-      toast.error('Please enter a new email or password.');
+    const normalizedEmail = editEmail.trim();
+    const emailChanged = normalizedEmail !== (editingDevice.email || '');
+    if (emailChanged && !normalizedEmail) {
+      toast.error('Device username cannot be empty.');
       return;
+    }
+    if (!emailChanged && !editPassword) {
+      toast.error('Please enter a new device username or password.');
+      return;
+    }
+    if (editPassword) {
+      const passwordError = getPasswordPolicyError(editPassword);
+      if (passwordError) {
+        toast.error(passwordError);
+        return;
+      }
     }
 
     setIsUpdatingAuth(true);
@@ -213,7 +167,7 @@ export function DevicesPage() {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
-      const res = await fetch('/.netlify/functions/update-device-auth', {
+      const res = await fetch('/api/update-device-auth', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -221,51 +175,98 @@ export function DevicesPage() {
         },
         body: JSON.stringify({
           targetUid: editingDevice.id,
-          email: editEmail || undefined,
+          email: emailChanged ? normalizedEmail : undefined,
           password: editPassword || undefined,
         }),
       });
 
+      const result = await res.json().catch(() => null) as { error?: string; reconciliationRequired?: boolean; reference?: string } | null;
       if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(errorText || 'Failed to update credentials');
+        throw new Error(result?.error || 'Failed to update credentials');
       }
-
-      await addDoc(collection(db, 'auditLogs'), {
-        actorUid: uid,
-        action: 'device_credentials_updated',
-        target: `devices/${editingDevice.id}`,
-        details: `Updated credentials for device "${editingDevice.name}"`,
-        timestamp: serverTimestamp(),
-      });
-
-      toast.success('Device credentials updated successfully');
+      if (result?.reconciliationRequired) {
+        toast.warning(`Credentials changed, but follow-up is required. Reference: ${result.reference}`);
+      } else {
+        toast.success('Device credentials updated successfully');
+      }
       setEditingDevice(null);
-    } catch (err: any) {
+      setEditPassword('');
+      setShowEditPassword(false);
+    } catch (err) {
       console.error('Update credentials error:', err);
-      toast.error(err.message || 'Failed to update credentials');
+      toast.error(err instanceof Error ? err.message : 'Failed to update credentials');
     } finally {
       setIsUpdatingAuth(false);
     }
+  }
+
+  async function handleDeleteDevice(device: DeviceWithId) {
+    setIsDeleting(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const res = await fetch('/api/delete-device', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ targetUid: device.id }),
+      });
+
+      const result = await res.json().catch(() => null) as { error?: string; reconciliationRequired?: boolean; reference?: string } | null;
+      if (!res.ok) {
+        throw new Error(result?.error || 'Failed to delete device');
+      }
+
+      if (result?.reconciliationRequired) {
+        toast.warning(`Login deleted, but follow-up is required. Reference: ${result.reference}`);
+      } else {
+        toast.success(`Device "${device.name}" deleted`);
+      }
+      setDeletingDevice(null);
+    } catch (err) {
+      console.error('Delete device error:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to delete device');
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  async function updateDeviceStatus(targetUid: string, status: 'active' | 'revoked') {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+    const response = await fetch('/api/update-device', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUid, status }),
+    });
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) throw new Error(result?.error || 'Failed to update device status');
   }
 
 
 
   function typeBadge(type: DeviceType) {
     const map: Record<DeviceType, string> = {
-      entry: '🚪 Entry',
-      exit: '🚶 Exit',
-      kiosk: '📋 Kiosk',
+      entry: 'Entry scanner',
+      exit: 'Exit scanner',
+      kiosk: 'Registration kiosk',
     };
     return map[type];
   }
+
+  const hasCredentialChanges = !!editingDevice && (
+    editEmail.trim() !== (editingDevice.email || '') || editPassword.length > 0
+  );
 
   // ============================================================
   // RENDER
   // ============================================================
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Devices
@@ -291,6 +292,7 @@ export function DevicesPage() {
           reset();
         }}
         title="Register New Device"
+        description="Create the username and password this scanner or kiosk will use to sign in."
         size="sm"
         preventClose={creating}
       >
@@ -299,8 +301,9 @@ export function DevicesPage() {
           className="grid gap-6 sm:grid-cols-2"
         >
           <div className="sm:col-span-2">
-            <FormField label="Device Name" error={errors.name?.message}>
+            <FormField label="Device Name" id="device-name" error={errors.name?.message}>
               <Input
+                id="device-name"
                 {...register('name')}
                 placeholder="Main Gate Entry Tablet"
                 error={!!errors.name}
@@ -308,24 +311,22 @@ export function DevicesPage() {
             </FormField>
           </div>
 
-          <FormField label="Type" error={errors.type?.message}>
-            <select
+          <FormField label="Type" id="device-type" error={errors.type?.message}>
+            <Select
+              id="device-type"
               {...register('type')}
-              className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent"
-              style={{
-                borderColor: errors.type ? 'var(--color-danger)' : 'var(--color-border)',
-                color: 'var(--color-text-primary)',
-              }}
+              error={!!errors.type}
             >
               <option value="">Select type…</option>
               <option value="entry">Entry Scanner</option>
               <option value="exit">Exit Scanner</option>
               <option value="kiosk">Kiosk</option>
-            </select>
+            </Select>
           </FormField>
 
-          <FormField label="Gate / Location" error={errors.gate?.message}>
+          <FormField label="Gate / Location" id="device-gate" error={errors.gate?.message}>
             <Input
+              id="device-gate"
               {...register('gate')}
               placeholder="Main Gate"
               error={!!errors.gate}
@@ -333,19 +334,27 @@ export function DevicesPage() {
           </FormField>
 
           <div className="sm:col-span-2">
-            <FormField label="Login Email (for the device)" error={errors.email?.message}>
+            <FormField
+              label="Device Username"
+              id="device-username"
+              hint="This is not an email inbox. Firebase requires the username to follow an email format."
+              error={errors.email?.message}
+            >
               <Input
+                id="device-username"
                 type="email"
                 {...register('email')}
                 placeholder="maingate-entry@earist-devices.local"
+                autoComplete="username"
                 error={!!errors.email}
               />
             </FormField>
           </div>
 
           <div className="sm:col-span-2">
-            <FormField label="Login Password (for the device)" error={errors.password?.message}>
+            <FormField label="Device Password" id="device-password" error={errors.password?.message}>
               <Input
+                id="device-password"
                 type="password"
                 {...register('password')}
                 placeholder="••••••••"
@@ -392,43 +401,46 @@ export function DevicesPage() {
                       {device.gate}
                     </p>
                   </div>
-                  <StatusBadge 
-                    status={device.status === 'active' ? 'issued' : 'rejected'} 
-                    label={device.status} 
-                  />
+                  <StatusBadge status={device.status} label={device.status} />
                 </div>
 
                 <div className="mb-6 space-y-3">
-                  <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+                  <p className="inline-flex rounded-full border border-[var(--color-brand)]/20 bg-[var(--color-brand-light)] px-2.5 py-1 text-xs font-semibold text-[var(--color-brand)]">
                     {typeBadge(device.type)}
                   </p>
                   
                   {device.email && (
-                    <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] bg-gray-50 rounded-md p-2 border border-[var(--color-border)]">
-                      <Mail className="h-4 w-4 shrink-0 text-gray-400" />
-                      <span className="truncate" title={device.email}>{device.email}</span>
+                    <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas)] p-2 text-sm text-[var(--color-text-secondary)]">
+                      <AtSign className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" aria-hidden="true" />
+                      <div className="min-w-0">
+                        <span className="block text-xs text-[var(--color-text-muted)]">Device username</span>
+                        <span className="block truncate" title={device.email}>{device.email}</span>
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
 
               <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setEditingDevice(device);
-                    setEditEmail(device.email || '');
-                    setEditPassword('');
-                  }}
-                  className="flex-1"
-                  icon={<Key className="h-4 w-4" />}
-                >
-                  Edit
-                </Button>
+                {canManageCredentials && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setEditingDevice(device);
+                      setEditEmail(device.email || '');
+                      setEditPassword('');
+                      setShowEditPassword(false);
+                    }}
+                    className="flex-1"
+                    icon={<Key className="h-4 w-4" />}
+                  >
+                    Edit
+                  </Button>
+                )}
                 <Button
                   variant={device.status === 'active' ? 'destructive' : 'primary'}
                   onClick={() => toggleDeviceStatus(device)}
-                  className="flex-[2]"
+                  className={canManageCredentials ? 'flex-[2]' : 'flex-1'}
                   icon={device.status === 'active' ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
                 >
                   {device.status === 'active' ? 'Revoke' : 'Reactivate'}
@@ -459,50 +471,104 @@ export function DevicesPage() {
 
       {/* Edit Credentials Modal */}
       <Modal
-        isOpen={!!editingDevice}
+        isOpen={canManageCredentials && !!editingDevice}
         onClose={() => {
           setEditingDevice(null);
           setEditEmail('');
           setEditPassword('');
+          setShowEditPassword(false);
         }}
-        title="Edit Credentials"
+        title="Edit Device Login"
+        description="Update the username or password used by this device."
         size="sm"
         preventClose={isUpdatingAuth}
       >
         <form onSubmit={handleUpdateCredentials} className="space-y-5">
-          <p className="text-sm text-[var(--color-text-secondary)] mb-2">
-            Update login credentials for <strong>{editingDevice?.name}</strong>. Leave a field blank if you do not wish to change it.
+          <p className="mb-2 text-sm text-[var(--color-text-secondary)]">
+            Update login credentials for <strong>{editingDevice?.name}</strong>. The username is not an email inbox, but it must follow an email format because Firebase uses it for sign-in.
           </p>
 
-          <FormField label="New Login Email">
+          <FormField label="Device Username" hint="Example: maingate-entry@earist-devices.local">
             <Input
               type="email"
               value={editEmail}
               onChange={(e) => setEditEmail(e.target.value)}
-              placeholder="Leave blank to keep current email"
+              placeholder="maingate-entry@earist-devices.local"
+              autoComplete="username"
             />
           </FormField>
 
-          <FormField label="New Login Password">
-            <Input
-              type="password"
-              value={editPassword}
-              onChange={(e) => setEditPassword(e.target.value)}
-              placeholder="Leave blank to keep current password"
-              minLength={6}
-            />
+          <FormField label="New Password">
+            <div className="relative">
+              <Input
+                type={showEditPassword ? 'text' : 'password'}
+                value={editPassword}
+                onChange={(e) => setEditPassword(e.target.value)}
+                placeholder="Leave blank to keep the current password"
+                minLength={PASSWORD_MIN_LENGTH}
+                maxLength={128}
+                autoComplete="new-password"
+                className="pr-12"
+              />
+              <button
+                type="button"
+                onClick={() => setShowEditPassword((visible) => !visible)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-md text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand)]"
+                aria-label={showEditPassword ? 'Hide replacement password' : 'Show replacement password'}
+              >
+                {showEditPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+              </button>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-muted)]">
+              For your security, we cannot show the current password. A replacement must have at least {PASSWORD_MIN_LENGTH} characters, including a letter and a number.
+            </p>
           </FormField>
 
-          <Button
-            type="submit"
-            disabled={isUpdatingAuth || (!editEmail && !editPassword)}
-            loading={isUpdatingAuth}
-            className="w-full"
-          >
-            {isUpdatingAuth ? 'Updating...' : 'Save Changes'}
-          </Button>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button
+              type="button"
+              variant="destructive-outline"
+              disabled={isUpdatingAuth}
+              onClick={() => {
+                if (!editingDevice) return;
+                setDeletingDevice(editingDevice);
+                setEditingDevice(null);
+                setEditPassword('');
+                setShowEditPassword(false);
+              }}
+              icon={<Trash2 className="h-4 w-4" />}
+              className="sm:w-auto"
+            >
+              Delete Device
+            </Button>
+            <Button
+              type="submit"
+              disabled={isUpdatingAuth || !hasCredentialChanges}
+              loading={isUpdatingAuth}
+              className="flex-1"
+            >
+              {isUpdatingAuth ? 'Updating...' : 'Save Changes'}
+            </Button>
+          </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        isOpen={canManageCredentials && !!deletingDevice}
+        onClose={() => setDeletingDevice(null)}
+        title="Permanently Delete Device?"
+        description={
+          <>
+            This permanently deletes <strong className="text-[var(--color-text-primary)]">{deletingDevice?.name}</strong> and its login account. Historical visit and audit records will remain. This action cannot be undone.
+          </>
+        }
+        onConfirm={() => {
+          if (deletingDevice) handleDeleteDevice(deletingDevice);
+        }}
+        confirmText="Delete Permanently"
+        isDestructive
+        loading={isDeleting}
+      />
     </div>
   );
 }

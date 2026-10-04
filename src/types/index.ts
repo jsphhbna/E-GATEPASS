@@ -3,7 +3,7 @@ import { Timestamp } from 'firebase/firestore';
 /* ============================================================
    USER ROLES
    ============================================================ */
-export type UserRole = 'guard' | 'admin';
+export type UserRole = 'guard' | 'admin' | 'superadmin';
 
 export type DeviceType = 'entry' | 'exit' | 'kiosk';
 
@@ -79,6 +79,7 @@ export interface VisitLog {
   deviceId: string | null;
   gate: string | null;
   guardUid: string | null;
+  guardName?: string | null;
   timestamp: Timestamp;
 }
 
@@ -105,8 +106,14 @@ export interface Device {
 
 export interface AuditLog {
   actorUid: string;
+  actorRole?: UserRole;
   action: string;
   target: string;
+  targetUid?: string;
+  previousRole?: UserRole;
+  newRole?: UserRole;
+  previousActive?: boolean;
+  newActive?: boolean;
   details: string;
   timestamp: Timestamp;
 }
@@ -115,10 +122,18 @@ export interface AppSettings {
   workingHours: {
     start: string; // "HH:mm" format
     end: string;
+    timezone: 'Asia/Manila';
   };
   rejectionReasons: string[];
+  visitPurposes: VisitPurposeOption[];
   retentionDays: number;
   peakMode: boolean;
+}
+
+export interface VisitPurposeOption {
+  label: string;
+  requiresDetails: boolean;
+  detailPrompt: string;
 }
 
 /* ============================================================

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore, enableMultiTabIndexedDbPersistence } from 'firebase/firestore';
+import { connectAuthEmulator, getAuth } from 'firebase/auth';
+import { connectFirestoreEmulator, enableMultiTabIndexedDbPersistence, getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -13,6 +13,15 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
+if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
+  try {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  } catch {
+    // Hot-module replacement may evaluate this module after the emulators are connected.
+  }
+}
+
 // Enable offline resilience (Phase 8)
 enableMultiTabIndexedDbPersistence(db).catch((err) => {
   if (err.code === 'failed-precondition') {
@@ -21,13 +30,3 @@ enableMultiTabIndexedDbPersistence(db).catch((err) => {
     console.warn('The current browser does not support all of the features required to enable persistence');
   }
 });
-
-// Connect to emulators in development
-// if (import.meta.env.DEV) {
-//   try {
-//     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-//     connectFirestoreEmulator(db, '127.0.0.1', 8080);
-//   } catch {
-//     // Emulators already connected — safe to ignore on HMR
-//   }
-// }

@@ -1,72 +1,70 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { LANDING_CONTENT } from '@/content/landing';
-import { 
-  ArrowRight, 
-  QrCode, 
-  UserCheck, 
-  ShieldCheck, 
-  UserX,
-  ScanLine,
-  CheckCircle,
-  Smartphone,
+import {
+  ArrowRight,
+  CalendarDays,
+  Camera,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardCheck,
+  DoorOpen,
+  FileText,
   IdCard,
-  Clock,
-  Shield,
-  FileCheck,
-  ChevronDown
+  MapPin,
+  QrCode,
+  ScanLine,
+  ShieldCheck,
+  Smartphone,
+  UserRound,
 } from 'lucide-react';
+import { LANDING_CONTENT } from '@/content/landing';
+
+const processIcons = [FileText, Camera, QrCode, ShieldCheck, DoorOpen];
+const needIcons = [UserRound, Camera, IdCard, CalendarDays];
+const verificationIcons = [ShieldCheck, UserRound, ScanLine, ClipboardCheck];
 
 export function LandingPage() {
   const [isScrolled, setIsScrolled] = useState(false);
-  const [openFaq, setOpenFaq] = useState<number | null>(null);
 
   useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 10);
-    };
+    const handleScroll = () => setIsScrolled(window.scrollY > 12);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const scrollToSection = (e: React.MouseEvent<HTMLAnchorElement>, id: string) => {
-    e.preventDefault();
-    const element = document.querySelector(id);
-    if (element) {
-      const isReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      element.scrollIntoView({ 
-        behavior: isReducedMotion ? 'auto' : 'smooth',
-        block: 'start'
-      });
-      // Update URL hash for accessibility/sharing without jumping
-      window.history.pushState(null, '', id);
-    }
-  };
+  function scrollToSection(event: MouseEvent<HTMLAnchorElement>, target: string) {
+    event.preventDefault();
+    const section = document.querySelector(target);
+    if (!section) return;
+    section.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
+    });
+    window.history.pushState(null, '', target);
+  }
 
   return (
-    <div className="flex min-h-dvh flex-col" style={{ color: 'var(--color-earist-ink)', backgroundColor: '#fff' }}>
-      
-      {/* 4.1 Header (sticky) */}
-      <header 
-        className={`sticky top-0 z-50 w-full transition-all duration-300 ${isScrolled ? 'bg-white shadow-sm' : 'bg-white/90 backdrop-blur-sm'}`}
-      >
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-3">
-            <img src="/earist-logo.png" alt="EARIST seal" className="h-10 w-10 object-contain" />
-            <div className="flex flex-col">
-              <span className="text-lg font-bold leading-none tracking-tight">{LANDING_CONTENT.header.title}</span>
-              <span className="text-[10px] font-semibold tracking-wider text-gray-500 uppercase">{LANDING_CONTENT.header.subtitle}</span>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-6">
-            <nav className="hidden md:flex items-center gap-6">
+    <div className="min-h-dvh overflow-x-hidden bg-white text-[var(--color-text-primary)]">
+      <header className={`sticky top-0 z-50 border-b border-transparent bg-white/95 backdrop-blur transition-shadow ${isScrolled ? 'border-[var(--color-border)] shadow-sm' : ''}`}>
+        <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          <Link to="/" className="flex min-w-0 items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]">
+            <img src="/earist-logo.png" alt="EARIST seal" className="h-10 w-10 shrink-0 object-contain" />
+            <span className="min-w-0">
+              <span className="block truncate text-base font-bold text-[var(--color-institutional)]">{LANDING_CONTENT.header.title}</span>
+              <span className="hidden truncate text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] sm:block">
+                {LANDING_CONTENT.header.subtitle}
+              </span>
+            </span>
+          </Link>
+
+          <div className="flex items-center gap-3 lg:gap-6">
+            <nav aria-label="Landing page sections" className="hidden items-center gap-5 lg:flex">
               {LANDING_CONTENT.header.navLinks.map((link) => (
-                <a 
-                  key={link.href} 
+                <a
+                  key={link.href}
                   href={link.href}
-                  onClick={(e) => scrollToSection(e, link.href)}
-                  className="text-sm font-semibold hover:text-[#E60000] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#E60000] rounded-sm px-1 transition-colors"
+                  onClick={(event) => scrollToSection(event, link.href)}
+                  className="rounded-sm text-sm font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-institutional)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
                 >
                   {link.label}
                 </a>
@@ -74,313 +72,265 @@ export function LandingPage() {
             </nav>
             <Link
               to="/get-pass"
-              className="inline-flex h-9 items-center justify-center rounded-md px-4 text-sm font-bold text-white transition-transform active:scale-95"
-              style={{ backgroundColor: 'var(--color-earist-red)' }}
+              className="inline-flex min-h-11 items-center justify-center rounded-md bg-[var(--color-action)] px-4 text-sm font-bold text-white hover:bg-[var(--color-action-dark)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-action)] focus-visible:ring-offset-2"
             >
-              {LANDING_CONTENT.header.cta}
+              <span className="sm:hidden">Get Pass</span>
+              <span className="hidden sm:inline">Get Your Gate Pass</span>
             </Link>
           </div>
         </div>
       </header>
 
-      <main className="flex-1">
-        {/* 4.2 Hero */}
-        <section className="relative overflow-hidden px-4 py-16 md:py-24" style={{ backgroundColor: 'var(--color-earist-maroon)' }}>
-          {/* Subtle background decoration */}
-          <div className="absolute inset-0 opacity-5 pointer-events-none flex items-center justify-center">
-            <QrCode className="w-[120%] h-[120%] text-white" strokeWidth={0.5} />
-          </div>
-          
-          <div className="relative z-10 mx-auto max-w-4xl text-center">
-            <p className="mb-4 text-xs md:text-sm font-bold tracking-widest uppercase" style={{ color: 'var(--color-earist-gold)' }}>
-              {LANDING_CONTENT.hero.eyebrow}
-            </p>
-            <h1 className="mb-6 text-4xl md:text-6xl font-extrabold tracking-tight text-white">
-              {LANDING_CONTENT.hero.title}
-            </h1>
-            <p className="mx-auto mb-10 max-w-2xl text-lg md:text-xl font-medium text-gray-200">
-              {LANDING_CONTENT.hero.subtitle}
-            </p>
-            
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link
-                to="/get-pass"
-                className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg px-8 py-4 text-[18.66px] font-bold text-white shadow-lg transition-transform active:scale-95 hover:brightness-110"
-                style={{ backgroundColor: 'var(--color-earist-red)' }}
-              >
-                {LANDING_CONTENT.hero.ctaPrimary}
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Link>
-              <a
-                href="#how-it-works"
-                onClick={(e) => scrollToSection(e, '#how-it-works')}
-                className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg px-8 py-4 text-[18.66px] font-bold text-white border-2 border-white/20 transition-colors hover:bg-white/10"
-              >
-                {LANDING_CONTENT.hero.ctaSecondary}
-              </a>
-            </div>
-            
-            <p className="mt-6 text-sm font-medium text-gray-300">
-              {LANDING_CONTENT.hero.features}
-            </p>
-          </div>
-        </section>
+      <main id="main-content">
+        <section className="relative overflow-hidden bg-[var(--color-institutional)] px-4 py-14 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
+          <div aria-hidden="true" className="landing-hero-glow absolute inset-y-0 right-0 w-2/3 opacity-70" />
+          <div className="relative mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
+            <div className="max-w-2xl text-white">
+              <p className="mb-4 text-sm font-bold uppercase tracking-widest text-[var(--color-accent)]">{LANDING_CONTENT.hero.eyebrow}</p>
+              <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl">{LANDING_CONTENT.hero.title}</h1>
+              <p className="mt-5 max-w-xl text-xl font-semibold leading-relaxed text-white">{LANDING_CONTENT.hero.subtitle}</p>
+              <p className="mt-3 max-w-xl text-base leading-relaxed text-white/75">{LANDING_CONTENT.hero.supportingText}</p>
 
-        {/* 4.3 What is E-GatePass? */}
-        <section id="what-is-it" className="scroll-mt-20 px-4 py-16 md:py-24 bg-white">
-          <div className="mx-auto max-w-6xl">
-            <div className="mb-12 max-w-3xl">
-              <h2 className="mb-6 text-3xl md:text-4xl font-bold">{LANDING_CONTENT.whatIsIt.heading}</h2>
-              <p className="text-lg text-gray-700 leading-relaxed">
-                {LANDING_CONTENT.whatIsIt.description}
-              </p>
-            </div>
-            
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {LANDING_CONTENT.whatIsIt.cards.map((card, i) => {
-                const icons = [<UserX className="h-6 w-6" />, <QrCode className="h-6 w-6" />, <UserCheck className="h-6 w-6" />, <ShieldCheck className="h-6 w-6" />];
-                return (
-                  <div key={i} className="rounded-xl border border-gray-100 bg-gray-50 p-6 shadow-sm">
-                    <div className="mb-4 inline-flex rounded-lg p-3" style={{ backgroundColor: 'var(--color-earist-red)', color: 'white' }}>
-                      {icons[i]}
-                    </div>
-                    <h3 className="mb-2 text-lg font-bold">{card.title}</h3>
-                    <p className="text-sm text-gray-600">{card.text}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        {/* 4.4 How it works */}
-        <section id="how-it-works" className="scroll-mt-20 px-4 py-16 md:py-24" style={{ backgroundColor: 'var(--color-canvas)' }}>
-          <div className="mx-auto max-w-6xl">
-            <h2 className="mb-12 text-center text-3xl md:text-4xl font-bold">{LANDING_CONTENT.howItWorks.heading}</h2>
-            
-            {/* Desktop Stepper / Mobile Timeline */}
-            <div className="relative">
-              <div className="hidden md:block absolute top-1/2 left-0 h-1 w-full -translate-y-1/2 bg-gray-200"></div>
-              
-              <div className="flex flex-col md:flex-row gap-8 md:gap-4 relative z-10">
-                {LANDING_CONTENT.howItWorks.steps.map((step, i) => {
-                  return (
-                    <div key={i} className="flex-1 flex flex-row md:flex-col items-start md:items-center relative group">
-                      <div className="hidden md:block absolute top-12 left-1/2 -translate-x-1/2 w-max px-3 py-1 bg-gray-100 rounded-full text-xs font-bold text-gray-500 mb-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {step.group}
-                      </div>
-                      <div className="md:hidden flex-shrink-0 w-24 pt-3 text-xs font-bold text-gray-500 uppercase">
-                        {step.group}
-                      </div>
-                      
-                      <div className="flex flex-col md:items-center text-left md:text-center flex-1 ml-4 md:ml-0">
-                        <div 
-                          className="flex h-12 w-12 items-center justify-center rounded-full border-4 border-white mb-4 shadow-sm"
-                          style={{ backgroundColor: 'var(--color-earist-maroon)', color: 'var(--color-earist-gold)' }}
-                        >
-                          <span className="text-lg font-bold">{step.number}</span>
-                        </div>
-                        <h3 className="mb-2 text-lg font-bold">{step.title}</h3>
-                        <p className="text-sm text-gray-600">{step.text}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-16 rounded-xl bg-white p-6 md:p-8 shadow-sm border border-gray-100">
-              <p className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-500 text-center">What to prepare</p>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-12 text-sm font-medium text-gray-700">
-                <div className="flex items-center gap-2">
-                  <Smartphone className="h-5 w-5 text-gray-400" />
-                  <span>Smartphone (or use kiosk)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <IdCard className="h-5 w-5 text-gray-400" />
-                  <span>A valid ID</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <QrCode className="h-5 w-5 text-gray-400" />
-                  <span>QR code ready</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 4.5 Why scanning out is required */}
-        <section id="why-exit" className="px-4 py-12 md:py-20" style={{ backgroundColor: 'var(--color-earist-maroon)' }}>
-          <div className="mx-auto max-w-4xl">
-            <h2 className="mb-4 text-2xl md:text-3xl font-bold" style={{ color: 'var(--color-earist-gold)' }}>
-              {LANDING_CONTENT.whyExit.heading}
-            </h2>
-            <p className="mb-8 text-lg font-medium text-gray-200">
-              {LANDING_CONTENT.whyExit.intro}
-            </p>
-            
-            <div className="grid gap-6 sm:grid-cols-2">
-              {LANDING_CONTENT.whyExit.points.map((point, i) => {
-                const icons = [<Clock />, <Shield />, <FileCheck />, <ShieldCheck />];
-                return (
-                  <div key={i} className="flex gap-4">
-                    <div className="flex-shrink-0 mt-1" style={{ color: 'var(--color-earist-gold)' }}>
-                      {icons[i]}
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-white mb-1">{point.title}</h3>
-                      <p className="text-sm text-gray-300">{point.text}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            
-            <div className="mt-8 rounded-lg bg-black/20 p-4 border border-white/10">
-              <p className="text-sm font-medium text-gray-200 flex items-center gap-2">
-                <CheckCircle className="h-4 w-4" style={{ color: 'var(--color-earist-gold)' }} />
-                {LANDING_CONTENT.whyExit.closing}
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* 4.6 Where to go */}
-        <section id="where-to-go" className="scroll-mt-20 px-4 py-16 md:py-24 bg-white">
-          <div className="mx-auto max-w-6xl">
-            <h2 className="mb-10 text-3xl md:text-4xl font-bold">{LANDING_CONTENT.whereToGo.heading}</h2>
-            
-            <div className="grid gap-6 md:grid-cols-3">
-              {LANDING_CONTENT.whereToGo.cards.map((card, i) => {
-                const icons = [<Smartphone />, <ScanLine />, <ScanLine />];
-                return (
-                  <div key={i} className="flex flex-col rounded-xl border-2 border-gray-100 p-6">
-                    <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100 text-gray-600">
-                      {icons[i]}
-                    </div>
-                    <h3 className="mb-2 text-xl font-bold">{card.title}</h3>
-                    <p className="mb-6 text-sm text-gray-600 flex-1">{card.text}</p>
-                    <div className="rounded bg-gray-50 p-3 text-xs font-semibold text-gray-700">
-                      {card.location}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            
-            <div className="mt-8 text-center text-sm font-medium text-gray-600">
-              {LANDING_CONTENT.whereToGo.validity}
-            </div>
-          </div>
-        </section>
-
-        {/* 4.7 FAQ */}
-        <section id="faq" className="scroll-mt-20 px-4 py-16 md:py-24" style={{ backgroundColor: 'var(--color-canvas)' }}>
-          <div className="mx-auto max-w-3xl">
-            <h2 className="mb-10 text-3xl md:text-4xl font-bold text-center">{LANDING_CONTENT.faq.heading}</h2>
-            
-            <div className="space-y-4">
-              {LANDING_CONTENT.faq.items.map((item, i) => (
-                <details 
-                  key={i} 
-                  className="group rounded-xl border border-gray-200 bg-white shadow-sm [&_summary::-webkit-details-marker]:hidden"
-                  onToggle={(e) => {
-                    if ((e.target as HTMLDetailsElement).open) {
-                      setOpenFaq(i);
-                    } else if (openFaq === i) {
-                      setOpenFaq(null);
-                    }
-                  }}
-                  open={openFaq === i}
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                <Link
+                  to="/get-pass"
+                  className="inline-flex min-h-12 items-center justify-center rounded-md bg-[var(--color-action)] px-6 text-base font-bold text-white shadow-md hover:bg-[var(--color-action-dark)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-institutional)]"
                 >
-                  <summary className="flex cursor-pointer items-center justify-between p-5 font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#E60000] rounded-xl">
-                    <span>{item.q}</span>
-                    <span className="ml-4 flex-shrink-0 transition-transform duration-200 group-open:rotate-180">
-                      <ChevronDown className="h-5 w-5 text-gray-400" />
-                    </span>
-                  </summary>
-                  <div className="px-5 pb-5 text-gray-600 leading-relaxed">
-                    {item.a}
+                  Get Your Gate Pass
+                  <ArrowRight className="ml-2 h-5 w-5" aria-hidden="true" />
+                </Link>
+                <a
+                  href="#how-it-works"
+                  onClick={(event) => scrollToSection(event, '#how-it-works')}
+                  className="inline-flex min-h-12 items-center justify-center rounded-md border border-white/40 px-6 text-base font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  How It Works
+                </a>
+              </div>
+
+              <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2 text-sm font-medium text-white/75">
+                <span className="inline-flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-[var(--color-accent)]" aria-hidden="true" />No visitor account needed</span>
+                <span className="inline-flex items-center gap-2"><Smartphone className="h-4 w-4 text-[var(--color-accent)]" aria-hidden="true" />Works on phone or kiosk</span>
+              </div>
+            </div>
+
+            <SampleGatePass />
+          </div>
+        </section>
+
+        <section id="how-it-works" aria-labelledby="process-heading" className="scroll-mt-20 bg-white px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <SectionHeading id="process-heading" eyebrow="Visitor process" title={LANDING_CONTENT.process.heading} description={LANDING_CONTENT.process.intro} centered />
+          <ol className="relative mx-auto mt-12 grid max-w-6xl gap-8 md:grid-cols-5 md:gap-4">
+            <div aria-hidden="true" className="absolute bottom-10 left-5 top-10 w-px bg-[var(--color-accent)] md:bottom-auto md:left-[10%] md:right-[10%] md:top-6 md:h-px md:w-auto" />
+            {LANDING_CONTENT.process.steps.map((step, index) => {
+              const Icon = processIcons[index] ?? FileText;
+              return (
+                <li key={step.title} className="relative flex gap-5 md:flex-col md:items-center md:text-center">
+                  <div className="relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--color-institutional)] text-sm font-bold text-white ring-4 ring-white">
+                    {index + 1}
                   </div>
+                  <div className="pt-1 md:pt-0">
+                    <Icon className="mb-3 hidden h-5 w-5 text-[var(--color-institutional)] md:mx-auto md:block" aria-hidden="true" />
+                    <h3 className="text-base font-bold">{step.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-[var(--color-text-secondary)]">{step.text}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+
+        <section id="what-you-need" aria-labelledby="needs-heading" className="scroll-mt-20 bg-[var(--color-canvas)] px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <div className="mx-auto max-w-7xl">
+            <SectionHeading id="needs-heading" eyebrow="Before you begin" title={LANDING_CONTENT.needs.heading} description={LANDING_CONTENT.needs.intro} />
+            <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+              {LANDING_CONTENT.needs.items.map((item, index) => {
+                const Icon = needIcons[index] ?? FileText;
+                return (
+                  <article key={item.title} className="rounded-xl border border-[var(--color-border)] bg-white p-6 shadow-sm">
+                    <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--color-brand-light)] text-[var(--color-institutional)]">
+                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <h3 className="text-lg font-bold">{item.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-[var(--color-text-secondary)]">{item.text}</p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="verification-heading" className="bg-white px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:items-center">
+            <div className="rounded-2xl bg-[var(--color-institutional)] p-7 text-white sm:p-9">
+              <ShieldCheck className="h-10 w-10 text-[var(--color-accent)]" aria-hidden="true" />
+              <h2 id="verification-heading" className="mt-6 text-3xl font-bold tracking-tight">{LANDING_CONTENT.verification.heading}</h2>
+              <p className="mt-4 max-w-xl text-base leading-relaxed text-white/75">{LANDING_CONTENT.verification.intro}</p>
+            </div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              {LANDING_CONTENT.verification.points.map((point, index) => {
+                const Icon = verificationIcons[index] ?? ShieldCheck;
+                return (
+                  <article key={point.title} className="flex gap-4 rounded-xl border border-[var(--color-border)] p-5">
+                    <Icon className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-institutional)]" aria-hidden="true" />
+                    <div>
+                      <h3 className="font-bold">{point.title}</h3>
+                      <p className="mt-1 text-sm leading-relaxed text-[var(--color-text-secondary)]">{point.text}</p>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section id="privacy" aria-labelledby="privacy-heading" className="scroll-mt-20 bg-[var(--color-canvas)] px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <div className="mx-auto max-w-5xl rounded-2xl border border-[var(--color-border)] bg-white p-7 shadow-sm sm:p-10">
+            <div className="grid gap-8 md:grid-cols-[0.75fr_1.25fr]">
+              <div>
+                <p className="text-sm font-bold uppercase tracking-widest text-[var(--color-institutional)]">Responsible data use</p>
+                <h2 id="privacy-heading" className="mt-3 text-3xl font-bold tracking-tight">{LANDING_CONTENT.privacy.heading}</h2>
+                <p className="mt-4 text-base leading-relaxed text-[var(--color-text-secondary)]">{LANDING_CONTENT.privacy.intro}</p>
+              </div>
+              <div>
+                <ul className="space-y-4">
+                  {LANDING_CONTENT.privacy.points.map((point) => (
+                    <li key={point} className="flex gap-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-success)]" aria-hidden="true" />
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-6 border-t border-[var(--color-border)] pt-5 text-sm font-semibold text-[var(--color-text-primary)]">{LANDING_CONTENT.privacy.law}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="faq" aria-labelledby="faq-heading" className="scroll-mt-20 bg-white px-4 py-16 sm:px-6 lg:px-8 lg:py-20">
+          <div className="mx-auto max-w-3xl">
+            <SectionHeading id="faq-heading" eyebrow="Visitor help" title={LANDING_CONTENT.faq.heading} centered />
+            <div className="mt-10 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+              {LANDING_CONTENT.faq.items.map((item) => (
+                <details key={item.q} className="group">
+                  <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 py-4 font-bold text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] [&::-webkit-details-marker]:hidden">
+                    <span>{item.q}</span>
+                    <ChevronDown className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)] transition-transform group-open:rotate-180" aria-hidden="true" />
+                  </summary>
+                  <p className="max-w-2xl pb-5 pr-8 text-sm leading-relaxed text-[var(--color-text-secondary)]">{item.a}</p>
                 </details>
               ))}
             </div>
           </div>
         </section>
 
-        {/* 4.8 Your privacy */}
-        <section id="privacy" className="scroll-mt-20 px-4 py-16 md:py-24 bg-white">
+        <section className="bg-[var(--color-institutional)] px-4 py-14 text-center text-white sm:px-6 lg:px-8">
           <div className="mx-auto max-w-3xl">
-            <div className="mb-8 flex items-center gap-3">
-              <ShieldCheck className="h-8 w-8" style={{ color: 'var(--color-earist-red)' }} />
-              <h2 className="text-3xl md:text-4xl font-bold">{LANDING_CONTENT.privacy.heading}</h2>
-            </div>
-            
-            <p className="mb-8 text-lg text-gray-700">
-              {LANDING_CONTENT.privacy.intro}
-            </p>
-            
-            <dl className="mb-8 divide-y divide-gray-100 rounded-xl border border-gray-200 bg-gray-50">
-              {LANDING_CONTENT.privacy.list.map((item, i) => (
-                <div key={i} className="grid grid-cols-1 gap-1 p-5 sm:grid-cols-3 sm:gap-4">
-                  <dt className="font-bold text-gray-900">{item.term}</dt>
-                  <dd className="sm:col-span-2 text-gray-700">{item.def}</dd>
-                </div>
-              ))}
-            </dl>
-            
-            <p className="text-sm font-medium text-gray-500">
-              {LANDING_CONTENT.privacy.closing}
-            </p>
+            <h2 className="text-3xl font-bold tracking-tight">{LANDING_CONTENT.finalCta.heading}</h2>
+            <p className="mx-auto mt-3 max-w-xl text-base leading-relaxed text-white/75">{LANDING_CONTENT.finalCta.text}</p>
+            <Link
+              to="/get-pass"
+              className="mt-7 inline-flex min-h-12 items-center justify-center rounded-md bg-white px-7 text-base font-bold text-[var(--color-institutional)] shadow-sm hover:bg-[var(--color-canvas)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-institutional)]"
+            >
+              Get Your Gate Pass
+              <ArrowRight className="ml-2 h-5 w-5" aria-hidden="true" />
+            </Link>
           </div>
-        </section>
-
-        {/* 4.9 Final call to action */}
-        <section className="px-4 py-16 md:py-20 text-center" style={{ backgroundColor: 'var(--color-earist-red)' }}>
-          <h2 className="mb-8 text-3xl md:text-4xl font-bold text-white">
-            {LANDING_CONTENT.finalCta.heading}
-          </h2>
-          <Link
-            to="/get-pass"
-            className="inline-flex items-center justify-center rounded-lg bg-white px-10 py-5 text-[18.66px] font-bold shadow-lg transition-transform active:scale-95 hover:bg-gray-50"
-            style={{ color: 'var(--color-earist-maroon)' }}
-          >
-            {LANDING_CONTENT.finalCta.cta}
-            <ArrowRight className="ml-2 h-5 w-5" />
-          </Link>
         </section>
       </main>
 
-      {/* 4.10 Footer */}
-      <footer className="border-t border-gray-200 bg-white px-4 py-12">
-        <div className="mx-auto max-w-6xl flex flex-col items-center text-center">
-          <img src="/earist-logo.png" alt="EARIST seal" className="mb-6 h-12 w-12 object-contain grayscale opacity-60" />
-          
-          <h2 className="mb-2 text-sm font-bold tracking-widest text-gray-900 uppercase">
-            {LANDING_CONTENT.footer.officialName}
-          </h2>
-          <p className="mb-6 text-sm font-semibold" style={{ color: 'var(--color-earist-red)' }}>
-            E-GatePass
-          </p>
-          
-          <p className="mb-6 max-w-md text-sm text-gray-500 leading-relaxed">
-            {LANDING_CONTENT.footer.contact}
-          </p>
-          
-          <a 
-            href={LANDING_CONTENT.footer.websiteLink.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mb-12 text-sm font-bold underline hover:text-[#E60000] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#E60000] rounded-sm px-1"
-          >
-            {LANDING_CONTENT.footer.websiteLink.text}
-          </a>
-          
-          <p className="text-xs text-gray-400">
-            {LANDING_CONTENT.footer.smallPrint}
-          </p>
-        </div>
-      </footer>
+      <InstitutionalFooter />
     </div>
+  );
+}
+
+function SampleGatePass() {
+  return (
+    <aside aria-label="Example digital gate pass" className="mx-auto w-full max-w-md lg:mx-0 lg:justify-self-end">
+      <div className="rounded-2xl border border-white/15 bg-white p-5 shadow-lg sm:p-6">
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-4">
+          <div className="flex items-center gap-3">
+            <img src="/earist-logo.png" alt="" className="h-10 w-10 object-contain" />
+            <div>
+              <p className="text-sm font-extrabold text-[var(--color-institutional)]">E-GatePass</p>
+              <p className="text-xs text-[var(--color-text-secondary)]">Sample visitor pass</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-[var(--color-success-light)] px-3 py-1 text-xs font-bold text-[var(--color-success)]">QR ready</span>
+        </div>
+
+        <div className="grid gap-5 py-6 sm:grid-cols-[9rem_1fr] sm:items-center">
+          <div className="mx-auto flex aspect-square w-36 items-center justify-center rounded-xl border border-[var(--color-border)] bg-white shadow-sm">
+            <QrCode className="h-28 w-28 text-[var(--color-text-primary)]" strokeWidth={1.4} aria-hidden="true" />
+          </div>
+          <dl className="grid gap-4 text-sm">
+            <PassDetail term="Visitor" description="Sample Visitor" />
+            <PassDetail term="Visit date" description="Selected visit date" />
+            <PassDetail term="Entry point" description="Assigned campus gate" />
+          </dl>
+        </div>
+
+        <div className="flex items-start gap-3 rounded-lg bg-[var(--color-brand-light)] p-4 text-sm">
+          <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-institutional)]" aria-hidden="true" />
+          <div>
+            <p className="font-bold text-[var(--color-text-primary)]">Verification at the gate</p>
+            <p className="mt-1 leading-relaxed text-[var(--color-text-secondary)]">A QR code is not automatic entry approval. Campus security verifies each visitor after scanning.</p>
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 text-center text-xs font-medium text-white/60">Illustration only — your pass is created after registration.</p>
+    </aside>
+  );
+}
+
+function PassDetail({ term, description }: { term: string; description: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">{term}</dt>
+      <dd className="mt-1 font-bold text-[var(--color-text-primary)]">{description}</dd>
+    </div>
+  );
+}
+
+function SectionHeading({ id, eyebrow, title, description, centered = false }: { id: string; eyebrow: string; title: string; description?: string; centered?: boolean }) {
+  return (
+    <div className={`${centered ? 'mx-auto text-center' : ''} max-w-2xl`}>
+      <p className="text-sm font-bold uppercase tracking-widest text-[var(--color-institutional)]">{eyebrow}</p>
+      <h2 id={id} className="mt-3 text-3xl font-bold tracking-tight">{title}</h2>
+      {description && <p className="mt-3 text-base leading-relaxed text-[var(--color-text-secondary)]">{description}</p>}
+    </div>
+  );
+}
+
+function InstitutionalFooter() {
+  const footer = LANDING_CONTENT.footer;
+  return (
+    <footer className="border-t border-[var(--color-border)] bg-white px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mx-auto grid max-w-7xl gap-8 md:grid-cols-[1.25fr_0.75fr]">
+        <div className="flex items-start gap-4">
+          <img src="/earist-logo.png" alt="EARIST seal" className="h-12 w-12 shrink-0 object-contain" />
+          <div>
+            <h2 className="max-w-xl text-sm font-extrabold uppercase tracking-wide text-[var(--color-text-primary)]">{footer.officialName}</h2>
+            <p className="mt-2 text-sm font-semibold text-[var(--color-institutional)]">{footer.systemName}</p>
+            <p className="mt-3 flex items-start gap-2 text-sm text-[var(--color-text-secondary)]">
+              <MapPin className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{footer.location}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="text-sm text-[var(--color-text-secondary)] md:text-right">
+          <a href={footer.website.href} target="_blank" rel="noopener noreferrer" className="font-bold text-[var(--color-institutional)] underline decoration-[var(--color-accent)] decoration-2 underline-offset-4 hover:text-[var(--color-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]">
+            {footer.website.text}
+          </a>
+          <p className="mt-4 leading-relaxed">{footer.privacy}</p>
+        </div>
+      </div>
+      <div className="mx-auto mt-8 max-w-7xl border-t border-[var(--color-border)] pt-6 text-xs leading-relaxed text-[var(--color-text-muted)]">
+        <p>{footer.project}</p>
+        <p className="mt-1">{footer.adviser}</p>
+        <p className="mt-3">© 2026 EARIST E-GatePass</p>
+      </div>
+    </footer>
   );
 }

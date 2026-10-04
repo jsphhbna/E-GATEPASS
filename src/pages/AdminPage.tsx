@@ -18,6 +18,7 @@ import { BrandMark } from '@/components/BrandMark';
 import { ConfirmModal } from '@/components/ui';
 import { useState } from 'react';
 import type { AppUser } from '@/types';
+import { formatUserRole, isSuperAdmin } from '@/lib/permissions';
 
 const navItems = [
   { to: '/admin', icon: LayoutDashboard, label: 'Dashboard', end: true },
@@ -30,11 +31,12 @@ const navItems = [
 ];
 
 export function AdminPage() {
-  const { userData } = useAuth();
+  const { userData, role } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const adminName = (userData as AppUser | null)?.name ?? 'Admin';
+  const adminRoleLabel = isSuperAdmin(role) ? formatUserRole('superadmin') : 'Admin';
 
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [showSignOutModal, setShowSignOutModal] = useState(false);
@@ -51,78 +53,56 @@ export function AdminPage() {
   }
 
   return (
-    <div className="flex min-h-dvh">
+    <div className="flex min-h-dvh bg-[var(--color-canvas)]">
       {/* Mobile hamburger */}
       <button
         type="button"
         onClick={() => setSidebarOpen(true)}
-        className="fixed left-3 top-3 z-40 rounded-md p-2 md:hidden"
-        style={{
-          backgroundColor: 'var(--color-surface)',
-          boxShadow: 'var(--shadow-sm)',
-          borderRadius: 'var(--radius-sm)',
-        }}
+        className="fixed left-3 top-3 z-40 flex min-h-11 min-w-11 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-primary)] shadow-sm md:hidden"
         aria-label="Open menu"
       >
-        <Menu className="h-5 w-5" style={{ color: 'var(--color-text-primary)' }} />
+        <Menu className="h-5 w-5" />
       </button>
 
       {/* Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/30 md:hidden"
+          className="fixed inset-0 z-40 bg-[var(--color-overlay-strong)] md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r transition-transform duration-200 md:relative md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-[var(--color-brand-dark)] text-white shadow-md transition-transform duration-200 md:sticky md:top-0 md:h-dvh md:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
-        style={{
-          backgroundColor: 'var(--color-surface)',
-          borderColor: 'var(--color-border)',
-        }}
       >
         {/* Header */}
-        <div
-          className="flex items-center justify-between border-b p-4"
-          style={{ borderColor: 'var(--color-border)' }}
-        >
+        <div className="flex min-h-16 items-center justify-between border-b border-white/10 px-4">
           <div className="flex items-center gap-2">
-            <BrandMark size="sm" />
-            <span
-              className="text-sm font-bold"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              E-GatePass
-            </span>
+            <BrandMark size="sm" className="bg-white" />
+            <span className="text-sm font-bold text-white">EARIST E-GatePass</span>
           </div>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="md:hidden"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-white/70 hover:bg-white/10 hover:text-white md:hidden"
             aria-label="Close menu"
           >
-            <X className="h-5 w-5" style={{ color: 'var(--color-text-muted)' }} />
+            <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-2 py-3">
+        <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Admin navigation">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.end}
               onClick={() => setSidebarOpen(false)}
-              className="mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium no-underline"
-              style={({ isActive }) => ({
-                backgroundColor: isActive ? 'var(--color-brand-light)' : 'transparent',
-                color: isActive ? 'var(--color-brand)' : 'var(--color-text-secondary)',
-                borderRadius: 'var(--radius-sm)',
-              })}
+              className={({ isActive }) => `mb-1 flex min-h-11 items-center gap-3 rounded-md px-3 text-sm font-semibold no-underline ${isActive ? 'bg-white text-[var(--color-brand-dark)] shadow-sm' : 'text-white/75 hover:bg-white/10 hover:text-white'}`}
             >
               <item.icon className="h-4 w-4" />
               {item.label}
@@ -131,25 +111,14 @@ export function AdminPage() {
         </nav>
 
         {/* Footer */}
-        <div
-          className="border-t p-3"
-          style={{ borderColor: 'var(--color-border)' }}
-        >
-          <p
-            className="mb-2 truncate text-xs font-medium"
-            style={{ color: 'var(--color-text-muted)' }}
-          >
-            Signed in as {adminName}
+        <div className="border-t border-white/10 p-3">
+          <p className="mb-2 truncate text-xs font-medium text-white/60">
+            Signed in as {adminName} · {adminRoleLabel}
           </p>
           <button
             type="button"
             onClick={() => setShowSignOutModal(true)}
-            className="flex w-full items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium"
-            style={{
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-danger)',
-              borderRadius: 'var(--radius-sm)',
-            }}
+            className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-white/20 px-3 text-xs font-semibold text-white/80 hover:border-white/40 hover:bg-white/10 hover:text-white"
           >
             <LogOut className="h-3 w-3" />
             Sign Out
@@ -170,7 +139,7 @@ export function AdminPage() {
       />
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto p-4 md:p-6">
+      <main id="main-content" className="min-w-0 flex-1 overflow-y-auto p-4 pt-20 md:p-6 lg:p-8">
         <Outlet />
       </main>
     </div>

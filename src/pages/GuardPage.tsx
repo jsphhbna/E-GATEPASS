@@ -6,14 +6,11 @@ import {
   orderBy,
   onSnapshot,
   doc,
-  updateDoc,
-  serverTimestamp,
-  addDoc,
   getDoc,
   limit,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
-import { signOut, updatePassword } from 'firebase/auth';
+import { signOut } from 'firebase/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { AuthenticatedImage } from '@/components/AuthenticatedImage';
 import type { GatePass } from '@/types';
@@ -30,21 +27,21 @@ import {
   X,
   ZoomIn,
   LogOut,
-  Key,
-  Eye,
-  EyeOff,
 } from 'lucide-react';
-import { Button, Card, Input, StatCard, Modal, FormField, ConfirmModal } from '@/components/ui';
+import { Button, Card, EmptyState, Input, Select, StatCard, Modal, ConfirmModal } from '@/components/ui';
 import { BrandMark } from '@/components/BrandMark';
 import { toast } from 'sonner';
+import { GuardAccountMenu } from '@/components/GuardAccountMenu';
+import { GuardPasswordResetModal } from '@/components/GuardPasswordResetModal';
 
 interface PassWithId extends GatePass {
   id: string;
 }
 
 export function GuardPage() {
-  const { uid, userData } = useAuth();
+  const { userData } = useAuth();
   const [passes, setPasses] = useState<PassWithId[]>([]);
+  const [queueError, setQueueError] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -53,6 +50,7 @@ export function GuardPage() {
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [isRejecting, setIsRejecting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const previousPendingCountRef = useRef(0);
 
   // Daily Report stats
   const [dailyStats, setDailyStats] = useState({
@@ -62,12 +60,7 @@ export function GuardPage() {
     total: 0,
   });
 
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordLoading, setPasswordLoading] = useState(false);
-  const [showPasswords, setShowPasswords] = useState(false);
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
 
   const [showSignOutModal, setShowSignOutModal] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -102,25 +95,28 @@ export function GuardPage() {
     const unsub = onSnapshot(
       q,
       (snap) => {
+        setQueueError(false);
         const list: PassWithId[] = [];
         snap.forEach((docSnap) => {
           list.push({ id: docSnap.id, ...docSnap.data() } as PassWithId);
         });
 
         // Play alert sound for new entries
-        if (list.length > passes.length && audioRef.current) {
+        if (list.length > previousPendingCountRef.current && audioRef.current) {
           audioRef.current.play().catch(() => {});
         }
 
+        previousPendingCountRef.current = list.length;
         setPasses(list);
       },
       (error) => {
         console.error('Guard listener error:', error);
+        setQueueError(true);
       }
     );
 
     return unsub;
-  }, [passes.length]);
+  }, []);
 
   // ============================================================
   // REAL-TIME LISTENER: daily report stats
@@ -180,27 +176,30 @@ export function GuardPage() {
   // ============================================================
   async function handleApprove(pass: PassWithId) {
     try {
-      await updateDoc(doc(db, 'gatePasses', pass.id), {
-        status: 'inside',
-        timeIn: serverTimestamp(),
-        decidedByUid: uid,
-      });
-
-      await addDoc(collection(db, 'visitLogs'), {
-        passToken: pass.id,
-        visitorId: pass.visitorId,
-        event: 'approved',
-        reason: null,
-        deviceId: null,
-        gate: pass.gate,
-        guardUid: uid,
-        timestamp: serverTimestamp(),
-      });
+      await recordDecision(pass.id, 'approved');
 
       toast.success(`${pass.visitorName} approved`);
     } catch (err) {
       console.error('Approve error:', err);
       toast.error('Failed to approve. Try again.');
+    }
+  }
+
+  async function recordDecision(passId: string, decision: 'approved' | 'rejected', reason: string | null = null) {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+
+    const response = await fetch('/.netlify/functions/decide-visit', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ passId, decision, reason }),
+    });
+    const responseBody = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(responseBody.error || 'Failed to record the visitor decision');
     }
   }
 
@@ -214,22 +213,7 @@ export function GuardPage() {
     }
 
     try {
-      await updateDoc(doc(db, 'gatePasses', pass.id), {
-        status: 'rejected',
-        rejectionReason: rejectReason,
-        decidedByUid: uid,
-      });
-
-      await addDoc(collection(db, 'visitLogs'), {
-        passToken: pass.id,
-        visitorId: pass.visitorId,
-        event: 'rejected',
-        reason: rejectReason,
-        deviceId: null,
-        gate: pass.gate,
-        guardUid: uid,
-        timestamp: serverTimestamp(),
-      });
+      await recordDecision(pass.id, 'rejected', rejectReason);
 
       toast.success(`${pass.visitorName} rejected`);
       setRejectingId(null);
@@ -277,51 +261,11 @@ export function GuardPage() {
     }
   }
 
-  async function handlePasswordChange(e: React.FormEvent) {
-    e.preventDefault();
-    if (!currentPassword) return toast.error('Please enter your current password');
-    if (!newPassword) return toast.error('Please enter a new password');
-    if (newPassword !== confirmPassword) return toast.error('Passwords do not match');
-
-    setPasswordLoading(true);
-    try {
-      if (!auth.currentUser || !auth.currentUser.email) throw new Error('Not authenticated');
-      
-      // Re-authenticate first
-      const { EmailAuthProvider, reauthenticateWithCredential } = await import('firebase/auth');
-      const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPassword);
-      await reauthenticateWithCredential(auth.currentUser, credential);
-
-      // Now update the password
-      await updatePassword(auth.currentUser, newPassword);
-      
-      toast.success('Password updated successfully');
-      setIsChangingPassword(false);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-    } catch (err: any) {
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        toast.error('Incorrect current password.');
-      } else if (err.code === 'auth/weak-password') {
-        toast.error('Password is too weak. Please use at least 6 characters.');
-      } else {
-        toast.error(err.message || 'Failed to update password');
-      }
-    } finally {
-      setPasswordLoading(false);
-    }
-  }
-
   // ============================================================
   // RENDER
   // ============================================================
   return (
-    <main
-      id="main-content"
-      className="min-h-dvh p-4"
-      style={{ backgroundColor: 'var(--color-canvas)' }}
-    >
+    <main id="main-content" className="mx-auto min-h-dvh max-w-screen-2xl bg-[var(--color-canvas)] p-4 sm:p-6 lg:p-8">
       {/* Simple beep audio — we generate it programmatically to avoid external files */}
       <audio ref={audioRef} preload="auto">
         <source
@@ -332,13 +276,7 @@ export function GuardPage() {
 
       {/* Offline Banner */}
       {!isOnline && (
-        <div
-          className="mb-4 flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white"
-          style={{
-            backgroundColor: 'var(--color-danger)',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
+        <div className="mb-4 flex items-center justify-center gap-2 rounded-md bg-[var(--color-danger)] px-4 py-2 text-sm font-semibold text-white" role="status">
           <WifiOff className="h-4 w-4" />
           Connection lost — data may be stale
         </div>
@@ -348,28 +286,21 @@ export function GuardPage() {
       <div className="mb-6 flex flex-col gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1
-              className="text-2xl font-bold"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
+            <p className="mb-1 text-xs font-bold uppercase tracking-widest text-[var(--color-brand)]">Campus security</p>
+            <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
               Guard Queue
             </h1>
-            <p
-              className="mt-1 text-sm"
-              style={{ color: 'var(--color-text-secondary)' }}
-            >
+            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
               {passes.length} pending verification
               {passes.length !== 1 ? 's' : ''}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm font-medium text-[var(--color-text-secondary)] mr-2 hidden sm:inline-block">
-              {userData && 'name' in userData ? userData.name : 'Guard'}
-            </span>
-            <Button variant="secondary" size="sm" onClick={() => setIsChangingPassword(true)} icon={<Key className="w-4 h-4" />}>
-              Change Password
-            </Button>
+            <GuardAccountMenu
+              name={userData && 'name' in userData ? userData.name : 'Guard'}
+              onResetPassword={() => setShowPasswordReset(true)}
+            />
             <Button variant="destructive-outline" size="sm" onClick={() => setShowSignOutModal(true)} icon={<LogOut className="w-4 h-4" />}>
               Sign Out
             </Button>
@@ -380,6 +311,7 @@ export function GuardPage() {
           <div className="w-full sm:w-64">
             <Input
               type="search"
+              aria-label="Search by name or purpose"
               placeholder="Search by name or purpose…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -417,27 +349,20 @@ export function GuardPage() {
       </div>
 
       {/* Pass Cards */}
-      {filteredPasses.length === 0 ? (
-        <div
-          className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-20"
-          style={{
-            borderColor: 'var(--color-border)',
-            borderRadius: 'var(--radius-lg)',
-          }}
-        >
-          <div className="mb-4 opacity-60">
-            <BrandMark size="lg" />
-          </div>
-          <p
-            className="text-sm font-medium"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            No pending passes
-          </p>
-          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            Passes will appear here when visitors scan at the entry
-          </p>
-        </div>
+      {queueError ? (
+        <EmptyState
+          icon={<WifiOff className="h-8 w-8" />}
+          title="Queue unavailable"
+          description="The visitor queue could not be loaded. Check the connection and try again."
+          className="min-h-64"
+        />
+      ) : filteredPasses.length === 0 ? (
+        <EmptyState
+          icon={<BrandMark size="sm" />}
+          title={searchTerm ? 'No matching visitors' : 'No pending passes'}
+          description={searchTerm ? 'Try a different name or purpose.' : 'New requests appear here after visitors scan at the entry gate.'}
+          className="min-h-64"
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredPasses.map((pass, index) => {
@@ -449,12 +374,12 @@ export function GuardPage() {
                   key={pass.id}
                   className={`col-span-full overflow-hidden transition-all motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200 ${
                     isPendingLong(pass) 
-                      ? 'border-[var(--color-warning)] ring-1 ring-[var(--color-warning)] motion-safe:animate-pulse' 
+                      ? 'border-[var(--color-warning)] ring-1 ring-[var(--color-warning)]'
                       : ''
                   }`}
                 >
                   {isPendingLong(pass) && (
-                    <div className="flex items-center gap-2 px-4 py-3 text-sm font-bold bg-amber-50 text-amber-700 border-b border-amber-200">
+                    <div className="flex items-center gap-2 border-b border-[var(--color-warning)] bg-[var(--color-warning-light)] px-4 py-3 text-sm font-bold text-[var(--color-warning-dark)]">
                       <Volume2 className="h-4 w-4" />
                       Pending for over 30 seconds
                     </div>
@@ -496,13 +421,19 @@ export function GuardPage() {
                       <div className="flex flex-col items-center border-b pb-6 md:border-b-0 md:border-r md:pb-0 md:pr-6 border-[var(--color-border)]">
                         <span className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Live Photo</span>
                         <div 
-                          className="relative group cursor-pointer"
+                          className="group relative cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
                           onClick={() => setZoomImage(pass.photoPublicId)}
+                          role="button"
+                          aria-label="Enlarge live photo"
+                          tabIndex={0}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') setZoomImage(pass.photoPublicId);
+                          }}
                         >
                           <AuthenticatedImage
                             publicId={pass.photoPublicId}
                             alt="Face Photo"
-                            className="h-56 w-48 rounded-xl object-cover shadow-sm bg-gray-100 transition-transform group-hover:scale-[1.02]"
+                            className="h-56 w-48 rounded-xl bg-[var(--color-overlay)] object-cover shadow-sm"
                           />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors rounded-xl flex items-center justify-center">
                             <ZoomIn className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md h-8 w-8" />
@@ -515,20 +446,26 @@ export function GuardPage() {
                         <span className="mb-3 text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Valid ID</span>
                         {pass.idImagePublicId ? (
                           <div 
-                            className="relative group cursor-pointer w-full max-w-xs"
+                            className="group relative w-full max-w-xs cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
                             onClick={() => setZoomImage(pass.idImagePublicId!)}
+                            role="button"
+                            aria-label="Enlarge ID photo"
+                            tabIndex={0}
+                            onKeyDown={(event) => {
+                              if ((event.key === 'Enter' || event.key === ' ') && pass.idImagePublicId) setZoomImage(pass.idImagePublicId);
+                            }}
                           >
                             <AuthenticatedImage
                               publicId={pass.idImagePublicId}
                               alt="ID Photo"
-                              className="h-56 w-full rounded-xl object-contain shadow-sm bg-gray-100 transition-transform group-hover:scale-[1.02]"
+                              className="h-56 w-full rounded-xl bg-[var(--color-overlay)] object-contain shadow-sm"
                             />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors rounded-xl flex items-center justify-center">
                               <ZoomIn className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md h-8 w-8" />
                             </div>
                           </div>
                         ) : (
-                          <div className="flex h-56 w-full max-w-xs items-center justify-center rounded-xl bg-gray-50 border-2 border-dashed border-gray-200 text-sm font-medium text-gray-400">
+                          <div className="flex h-56 w-full max-w-xs items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border)] bg-[var(--color-canvas)] text-sm font-medium text-[var(--color-text-muted)]">
                             No ID (Walk-in)
                           </div>
                         )}
@@ -536,8 +473,9 @@ export function GuardPage() {
                     </div>
 
                     {/* Actions */}
-                      <div className="flex gap-3 max-w-md mx-auto md:max-w-none">
+                      <div className="mx-auto flex max-w-md flex-col gap-3 sm:flex-row md:max-w-none">
                         <Button
+                          variant="success"
                           onClick={() => handleApprove(pass)}
                           className="flex-1"
                           size="lg"
@@ -573,8 +511,8 @@ export function GuardPage() {
               >
                 <div className="p-4">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gray-100">
-                      <User className="h-5 w-5 text-gray-400" />
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-neutral-light)]">
+                      <User className="h-5 w-5 text-[var(--color-text-muted)]" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <h3 className="truncate text-sm font-bold text-[var(--color-text-primary)]">
@@ -583,7 +521,7 @@ export function GuardPage() {
                       <p className="truncate text-xs text-[var(--color-text-secondary)] mt-0.5">
                         {pass.purpose}
                       </p>
-                      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] font-medium">
+                      <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)]">
                         <Clock className="h-3 w-3" />
                         {pass.scannedAt ? new Date(pass.scannedAt.toMillis()).toLocaleTimeString() : '—'}
                         {pass.gate && ` • ${pass.gate}`}
@@ -592,6 +530,7 @@ export function GuardPage() {
                   </div>
                   <div className="mt-4 flex gap-2">
                     <Button
+                      variant="success"
                       onClick={() => handleApprove(pass)}
                       className="flex-1"
                       size="sm"
@@ -632,10 +571,10 @@ export function GuardPage() {
           <p className="text-sm text-[var(--color-text-secondary)]">
             Please provide a reason for rejection. This will be recorded in the audit logs.
           </p>
-          <select
+          <Select
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
-            className="w-full rounded-lg border border-[var(--color-border)] px-4 py-3 text-sm outline-none focus:border-[var(--color-brand)] focus:ring-1 focus:ring-[var(--color-brand)] transition-shadow"
+            aria-label="Rejection reason"
           >
             <option value="">Select reason…</option>
             {rejectionReasons.map((reason) => (
@@ -643,7 +582,7 @@ export function GuardPage() {
                 {reason}
               </option>
             ))}
-          </select>
+          </Select>
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Button
               variant="secondary"
@@ -688,88 +627,11 @@ export function GuardPage() {
         )}
       </Modal>
 
-      {/* Voluntary Password Change Modal */}
-      {isChangingPassword && (
-        <Modal
-          isOpen={true}
-          onClose={() => {
-            setIsChangingPassword(false);
-            setNewPassword('');
-            setConfirmPassword('');
-          }}
-          title="Change Password"
-          description="Update your account security"
-          size="sm"
-        >
-          <form onSubmit={handlePasswordChange} className="space-y-4">
-            <FormField label="Current Password">
-              <div className="relative">
-                <Input
-                  type={showPasswords ? "text" : "password"}
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  disabled={passwordLoading}
-                  placeholder="••••••••"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPasswords(!showPasswords)}
-                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
-                >
-                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </FormField>
-            <FormField label="New Password">
-              <div className="relative">
-                <Input
-                  type={showPasswords ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  disabled={passwordLoading}
-                  placeholder="••••••••"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPasswords(!showPasswords)}
-                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
-                >
-                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </FormField>
-            <FormField label="Confirm Password">
-              <div className="relative">
-                <Input
-                  type={showPasswords ? "text" : "password"}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  disabled={passwordLoading}
-                  placeholder="••••••••"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPasswords(!showPasswords)}
-                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
-                >
-                  {showPasswords ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </FormField>
-            <div className="pt-2 flex justify-end gap-3">
-              <Button type="button" variant="ghost" onClick={() => setIsChangingPassword(false)} disabled={passwordLoading}>
-                Cancel
-              </Button>
-              <Button type="submit" loading={passwordLoading}>
-                Update
-              </Button>
-            </div>
-          </form>
-        </Modal>
-      )}
+      <GuardPasswordResetModal
+        isOpen={showPasswordReset}
+        email={auth.currentUser?.email || (userData && 'email' in userData ? userData.email || '' : '')}
+        onClose={() => setShowPasswordReset(false)}
+      />
 
       <ConfirmModal
         isOpen={showSignOutModal}

@@ -1,147 +1,84 @@
-export const PLACEHOLDERS = {
-  // TODO: confirm with the school
-  kioskLocation: "[KIOSK LOCATION: to be confirmed]",
-  entryGateName: "[ENTRY GATE NAME: to be confirmed]",
-  exitGateName: "[EXIT GATE NAME: to be confirmed]",
-  openingTime: "[OPENING TIME]",
-  closingTime: "[CLOSING TIME]",
-  acceptedIds: "[ACCEPTED IDS: to be confirmed with the school]",
-  retentionDays: "[RETENTION DAYS]",
-  creditLine: "[TEAM / ADVISER CREDIT: to be confirmed]"
-};
-
 export const LANDING_CONTENT = {
   header: {
-    title: "E-GatePass",
-    subtitle: "EARIST",
+    title: 'E-GatePass',
+    subtitle: 'EARIST Visitor Management',
     navLinks: [
-      { label: "What is it", href: "#what-is-it" },
-      { label: "How it works", href: "#how-it-works" },
-      { label: "Where to go", href: "#where-to-go" },
-      { label: "FAQ", href: "#faq" }
+      { label: 'How it works', href: '#how-it-works' },
+      { label: 'What you need', href: '#what-you-need' },
+      { label: 'Privacy', href: '#privacy' },
+      { label: 'FAQ', href: '#faq' },
     ],
-    cta: "Get Your Gate Pass"
   },
   hero: {
-    eyebrow: "Eulogio \"Amang\" Rodriguez Institute of Science and Technology",
-    title: "EARIST E-GatePass",
-    subtitle: "A faster, safer way to visit the campus. Generate your QR gate pass online, scan it at the gate, and you're set. No account needed.",
-    ctaPrimary: "Get Your Gate Pass",
-    ctaSecondary: "How it works",
-    features: "No account needed · Works on your phone"
+    eyebrow: 'EARIST Visitor Access',
+    title: 'E-GatePass',
+    subtitle: 'Secure digital visitor registration and campus entry verification.',
+    supportingText: 'Request your QR gate pass before arriving. No visitor account is required.',
   },
-  whatIsIt: {
-    heading: "What is E-GatePass?",
-    description: "E-GatePass is EARIST's QR code-based visitor management system. Instead of writing your details in a logbook at the gate, you generate a QR gate pass online and scan it when you enter and leave. A guard checks your photo and ID before letting you in, and your entry and exit times are recorded automatically.",
-    cards: [
-      { title: "No account needed", text: "Fill in a short form. No sign-up, no password." },
-      { title: "QR entry and exit", text: "One QR code for your visit. Scan in, scan out." },
-      { title: "Guard-verified", text: "A guard compares your ID, photo, and you in person before approving." },
-      { title: "Private by design", text: "Your photo and ID are viewable only by authorized staff." }
-    ]
-  },
-  howItWorks: {
-    heading: "How to get in: 5 simple steps",
+  process: {
+    heading: 'How E-GatePass works',
+    intro: 'Complete your request online, then present the QR code at the campus gate.',
     steps: [
-      {
-        number: 1,
-        group: "Before you arrive",
-        title: "Fill in your details",
-        text: "Tap \"Get Your Gate Pass.\" Enter your name, contact number, and purpose of visit, and choose your visit date."
-      },
-      {
-        number: 2,
-        group: "Before you arrive",
-        title: "Add your photo and ID",
-        text: "Take a photo of your face and upload a valid ID. Agree to the Data Privacy notice to continue."
-      },
-      {
-        number: 3,
-        group: "Before you arrive",
-        title: "Save your QR code",
-        text: "Your QR code appears right away. Download it or take a screenshot. No phone? Use the kiosk at the gate to print your pass."
-      },
-      {
-        number: 4,
-        group: "At the gate",
-        title: "Scan at the entry tablet",
-        text: "Show your QR code to the camera. Wait while the guard checks your ID and photo. The screen will say \"Approved, you may enter\" or \"Entry not approved, please see the guard.\""
-      },
-      {
-        number: 5,
-        group: "When you leave",
-        title: "Scan at the exit tablet",
-        text: "Scan the same QR code on your way out. Your exit is recorded and your visit is complete."
-      }
+      { title: 'Request pass', text: 'Enter your visitor details, purpose, and visit date.' },
+      { title: 'Photo and ID', text: 'Add a clear visitor photo and a valid ID when required.' },
+      { title: 'Receive QR', text: 'Your QR code is created for the scheduled visit.' },
+      { title: 'Guard approval', text: 'After the entry scan, campus security verifies and approves entry.' },
+      { title: 'Scan out', text: 'Scan the same QR code when leaving to complete the visit record.' },
     ],
-    prepare: "A smartphone with a camera (or use the kiosk) · A valid ID · Your QR code, downloaded or in a screenshot."
   },
-  whyExit: {
-    heading: "Why do I need to scan out?",
-    intro: "Scanning out takes a few seconds and it matters.",
-    points: [
-      { title: "It closes your visit.", text: "Your time-out is recorded, so the system knows you have left." },
-      { title: "It keeps everyone safe.", text: "In an emergency, security uses the list of people still inside the campus to account for everyone." },
-      { title: "It keeps records accurate.", text: "Entry and exit times are used for daily visitor reports." },
-      { title: "It protects your pass.", text: "A pass that has been used to exit cannot be reused. Coming back later means generating a new QR code." }
-    ],
-    closing: "Forgot to scan out? Tell the guard before you leave."
-  },
-  whereToGo: {
-    heading: "Where to go",
-    cards: [
-      {
-        title: "Get your pass",
-        text: "Anywhere, on your phone, using this website. Or use the kiosk at the gate to get a printed pass.",
-        location: `Location: ${PLACEHOLDERS.kioskLocation}`
-      },
-      {
-        title: "Entry scan",
-        text: "Scan your QR at the entry tablet, then wait for the guard's decision.",
-        location: `Location: ${PLACEHOLDERS.entryGateName}`
-      },
-      {
-        title: "Exit scan",
-        text: "Scan your QR at the exit tablet when you leave.",
-        location: `Location: ${PLACEHOLDERS.exitGateName}`
-      }
-    ],
-    validity: `Your pass works on your chosen visit date during campus hours, ${PLACEHOLDERS.openingTime} to ${PLACEHOLDERS.closingTime}.`
-  },
-  faq: {
-    heading: "Frequently asked questions",
+  needs: {
+    heading: 'What you need',
+    intro: 'Prepare these before requesting your visitor pass.',
     items: [
-      { q: "Do I need an account?", a: "No. You only fill in a short form. There is no sign-up and no password." },
-      { q: "Why do you need my photo and ID?", a: "So the guard can confirm who you are before you enter. The guard compares your ID, your photo, and you in person. Your photo and ID are used only for this and can be viewable only by authorized staff." },
-      { q: "What ID can I use?", a: `Please use a valid ID that shows your name and photo. ${PLACEHOLDERS.acceptedIds}` },
-      { q: "How long is my QR code valid?", a: "It is valid on the visit date you chose, during campus hours. After that it expires and cannot be used." },
-      { q: "What happens after I scan at the entry tablet?", a: "The guard sees your details and photo and approves or rejects your entry. The tablet then shows \"Approved, you may enter\" or \"Entry not approved, please see the guard.\" Reasons are not shown on the tablet. The guard will explain in person." },
-      { q: "My scan was not accepted. What does it mean?", a: "The tablet may say \"QR code not recognized,\" \"QR code expired or not valid at this time,\" \"QR code already used,\" or \"Already scanned, please wait for the guard.\" Please proceed to the guard for help." },
-      { q: "Can I leave and come back later the same day?", a: "Yes, but each entry needs a QR code that has not been used. After you exit, generate a new pass for your next entry." },
-      { q: "I forgot to scan out. What should I do?", a: "Tell the guard. Until an exit is recorded, your visit shows as still inside the campus." },
-      { q: "What if the system is down?", a: "Guards will record visitors in a manual logbook until the system is back." },
-      { q: "Is my information safe?", a: "Yes. Your details are handled in line with the Data Privacy Act of 2012. See \"Your privacy\" below." }
-    ]
+      { title: 'Visitor details', text: 'Your full name and contact number.' },
+      { title: 'Visitor photo', text: 'A clear, current photo for identity checking.' },
+      { title: 'Valid ID', text: 'A photo ID when required by campus policy.' },
+      { title: 'Visit information', text: 'Your purpose and intended visit date.' },
+    ],
+  },
+  verification: {
+    heading: 'Why visitor verification is required',
+    intro: 'A consistent verification process helps EARIST manage campus access responsibly.',
+    points: [
+      { title: 'Campus safety', text: 'Security personnel can confirm who is entering the campus.' },
+      { title: 'Identity verification', text: 'The submitted photo and ID support an in-person check.' },
+      { title: 'Controlled access', text: 'Entry and exit scans show whether a visit is active or complete.' },
+      { title: 'Accurate records', text: 'Visit information supports daily operations and emergency roll calls.' },
+    ],
   },
   privacy: {
-    heading: "Your privacy",
-    intro: "E-GatePass collects only what is needed to verify visitors and keep a record of who is on campus.",
-    list: [
-      { term: "What we collect:", def: "Name, contact number, purpose of visit, face photo, ID image, and your entry and exit times." },
-      { term: "Why:", def: "To verify your identity and keep campus safe and records accurate." },
-      { term: "Who can see it:", def: "Authorized security staff and administrators only." },
-      { term: "How long we keep images:", def: `Photos and ID images are deleted after ${PLACEHOLDERS.retentionDays} days.` }
+    heading: 'Privacy and safety',
+    intro: 'Personal information is collected only for visitor verification, campus access, and visit records.',
+    points: [
+      'Visitor photos and IDs are available only to authorized personnel.',
+      'Images are handled according to the system retention policy.',
+      'The registration form presents the full privacy notice before submission.',
     ],
-    closing: "Handled in line with the Data Privacy Act of 2012 (Republic Act No. 10173)."
+    law: 'Data is handled in line with the Data Privacy Act of 2012 (Republic Act No. 10173).',
+  },
+  faq: {
+    heading: 'Frequently asked questions',
+    items: [
+      { q: 'Do I need an account?', a: 'No. Visitors complete a short registration form without creating a username or password.' },
+      { q: 'Does receiving a QR mean I am approved to enter?', a: 'No. The QR identifies your visit request. Campus security reviews your photo and ID after the entry scan before approving entry.' },
+      { q: 'Why do you need my photo and ID?', a: 'They help security confirm that the person presenting the QR code matches the visitor request.' },
+      { q: 'How long is my QR code valid?', a: 'It is valid on the selected visit date during the configured campus visiting hours.' },
+      { q: 'What happens after I scan at the entrance?', a: 'Your request appears in the guard queue for identity verification and an entry decision.' },
+      { q: 'Why must I scan when leaving?', a: 'The exit scan closes your visit and keeps the list of people currently inside the campus accurate.' },
+      { q: 'What if the system is unavailable?', a: 'Follow the instructions of campus security. A manual visitor process may be used while service is restored.' },
+    ],
   },
   finalCta: {
-    heading: "Ready to visit EARIST?",
-    cta: "Get Your Gate Pass"
+    heading: 'Planning a visit to EARIST?',
+    text: 'Register in advance and receive your digital gate pass before arriving.',
   },
   footer: {
-    officialName: "EULOGIO \"AMANG\" RODRIGUEZ INSTITUTE OF SCIENCE AND TECHNOLOGY",
-    contact: "Nagtahan St, Sampaloc, Manila, 1008 Metro Manila · earistofficial1945@gmail.com · (028) 243-9467",
-    websiteLink: { text: "Visit the official EARIST website", href: "https://earist.edu.ph" },
-    smallPrint: "E-GatePass Capstone Project · Mary Joy Cagande · Joseph Habana · Mon Gerald Lanon · Jeferson Tambis · Adviser: Dhani San Jose · © 2026 EARIST"
-  }
+    officialName: 'Eulogio "Amang" Rodriguez Institute of Science and Technology',
+    systemName: 'EARIST E-GatePass Capstone Visitor Management System',
+    location: 'Nagtahan Street, Sampaloc, Manila, 1008 Metro Manila',
+    website: { text: 'Official EARIST website', href: 'https://earist.edu.ph/' },
+    privacy: 'Visitor information is handled in line with the Data Privacy Act of 2012 (RA 10173).',
+    project: 'Capstone Project — Mary Joy Cagande, Joseph Habana, Mon Gerald Lanon, and Jeferson Tambis',
+    adviser: 'Adviser: Dhani San Jose',
+  },
 };

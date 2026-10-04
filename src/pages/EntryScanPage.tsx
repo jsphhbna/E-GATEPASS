@@ -1,26 +1,17 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  doc,
-  getDoc,
-  runTransaction,
-  serverTimestamp,
-  addDoc,
-  collection,
-  Timestamp,
-  updateDoc,
-} from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
-import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Clock3, QrCode, XCircle, AlertTriangle } from 'lucide-react';
 import { BrandMark } from '@/components/BrandMark';
-import type { GatePass, Device } from '@/types';
+import type { Device } from '@/types';
+import { createOptimizedQrScanner, enableContinuousFocus, QR_SCAN_CONFIG } from '@/lib/qrScanner';
 
-type ScanStatus = 'ready' | 'processing' | 'success' | 'error';
+type ScanStatus = 'ready' | 'processing' | 'pending' | 'warning' | 'error';
 
 export function EntryScanPage() {
-  const { uid, userData } = useAuth();
+  const { userData } = useAuth();
   const [status, setStatus] = useState<ScanStatus>('ready');
   const [statusMessage, setStatusMessage] = useState('Scan a QR code');
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -30,260 +21,120 @@ export function EntryScanPage() {
   const device = userData as Device | null;
   const gate = device?.gate ?? 'Unknown Gate';
 
-  // ============================================================
-  // PROCESS SCANNED QR
-  // ============================================================
-  const processQR = useCallback(
-    async (passId: string) => {
-      if (debounceRef.current) return;
-      debounceRef.current = true;
+  const processQR = useCallback(async (passId: string) => {
+    if (debounceRef.current) return;
+    debounceRef.current = true;
+    if ('vibrate' in navigator) navigator.vibrate(50);
+    setStatus('processing');
+    setStatusMessage('Verifying…');
 
-      setStatus('processing');
-      setStatusMessage('Verifying…');
-
-      try {
-        // Look up the gate pass
-        const passRef = doc(db, 'gatePasses', passId);
-        const passSnap = await getDoc(passRef);
-
-        if (!passSnap.exists()) {
-          throw { code: 'not_found', message: 'QR code not recognized' };
-        }
-
-        const pass = passSnap.data() as GatePass;
-        const now = Timestamp.now();
-
-        // Check if expired (validUntil < now)
-        if (pass.validUntil && pass.validUntil.toMillis() < now.toMillis()) {
-          // Mark as expired if still issued
-          if (pass.status === 'issued') {
-            await updateDoc(passRef, { status: 'expired' });
-          }
-          throw { code: 'expired', message: 'This pass has expired' };
-        }
-
-        // Check if outside working hours (validFrom > now)
-        if (pass.validFrom && pass.validFrom.toMillis() > now.toMillis()) {
-          throw { code: 'early', message: 'Pass is not yet valid' };
-        }
-
-        // Status-based transitions
-        switch (pass.status) {
-          case 'issued': {
-            // issued → pending (entry scan)
-            await runTransaction(db, async (transaction) => {
-              const freshSnap = await transaction.get(passRef);
-              if (!freshSnap.exists()) throw new Error('Pass deleted');
-              const freshData = freshSnap.data() as GatePass;
-
-              if (freshData.status !== 'issued') {
-                throw { code: 'already_scanned', message: 'This pass has already been scanned' };
-              }
-
-              transaction.update(passRef, {
-                status: 'pending',
-                scannedAt: serverTimestamp(),
-                entryDeviceId: uid,
-                gate,
-              });
-            });
-
-            // Create visit log
-            await addDoc(collection(db, 'visitLogs'), {
-              passToken: passId,
-              visitorId: pass.visitorId,
-              event: 'scan_entry',
-              reason: null,
-              deviceId: uid,
-              gate,
-              guardUid: null,
-              timestamp: serverTimestamp(),
-            });
-
-            setStatus('success');
-            setStatusMessage('Scanned! Waiting for guard approval…');
-            toast.success('Pass scanned — pending guard approval', {
-              style: {
-                backgroundColor: '#16a34a',
-                color: '#fff',
-                fontSize: '18px',
-                fontWeight: 'bold',
-              },
-            });
-            break;
-          }
-
-          case 'pending':
-            throw { code: 'already_scanned', message: 'Already scanned — awaiting guard approval' };
-
-          case 'inside':
-            throw { code: 'already_scanned', message: 'Visitor is already inside' };
-
-          case 'rejected':
-            throw { code: 'rejected', message: 'This pass was rejected' };
-
-          case 'exited':
-            throw { code: 'already_used', message: 'This pass has already been used' };
-
-          case 'expired':
-            throw { code: 'expired', message: 'This pass has expired' };
-
-          default:
-            throw { code: 'unknown', message: 'Unknown pass status' };
-        }
-      } catch (err: unknown) {
-        const errObj = err as { code?: string; message?: string };
-        const message = errObj.message ?? 'Scan failed';
-        setStatus('error');
-        setStatusMessage(message);
-        toast.error(message, {
-          style: {
-            backgroundColor: '#dc2626',
-            color: '#fff',
-            fontSize: '18px',
-            fontWeight: 'bold',
-          },
-        });
-
-        // Log invalid scans
-        if (errObj.code) {
-          await addDoc(collection(db, 'visitLogs'), {
-            passToken: passId,
-            visitorId: null,
-            event: 'invalid_scan',
-            reason: message,
-            deviceId: uid,
-            gate,
-            guardUid: null,
-            timestamp: serverTimestamp(),
-          }).catch(() => {});
-        }
-      } finally {
-        // Reset after 3 seconds
-        resetTimerRef.current = setTimeout(() => {
-          setStatus('ready');
-          setStatusMessage('Scan a QR code');
-          debounceRef.current = false;
-        }, 3000);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw { code: 'unauthorized', message: 'Device session has expired' };
+      const response = await fetch('/api/scan-pass', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passId, mode: 'entry' }),
+      });
+      const result = await response.json().catch(() => null) as { code?: string; error?: string; message?: string } | null;
+      if (!response.ok) {
+        throw { code: result?.code || 'scan_failed', message: result?.error || 'Scan failed' };
       }
-    },
-    [uid, gate]
-  );
+      setStatus('pending');
+      setStatusMessage(result?.message || 'Scanned! Waiting for guard approval…');
+      toast.success('Pass scanned — pending guard approval');
+    } catch (error: unknown) {
+      const scanError = error as { code?: string; message?: string };
+      const message = scanError.message ?? 'Scan failed';
+      const warningCodes = ['already_scanned', 'already_used', 'early'];
+      setStatus(warningCodes.includes(scanError.code || '') ? 'warning' : 'error');
+      setStatusMessage(message);
+      toast.error(message);
+    } finally {
+      resetTimerRef.current = setTimeout(() => {
+        setStatus('ready');
+        setStatusMessage('Scan a QR code');
+        debounceRef.current = false;
+      }, 3000);
+    }
+  }, []);
 
-  // ============================================================
-  // QR SCANNER LIFECYCLE
-  // ============================================================
   useEffect(() => {
     const scannerId = 'entry-qr-reader';
-
-    // Small delay to ensure DOM element exists
+    let cancelled = false;
     const initTimer = setTimeout(async () => {
       try {
-        const scanner = new Html5Qrcode(scannerId);
+        const scanner = createOptimizedQrScanner(scannerId);
         scannerRef.current = scanner;
-
         await scanner.start(
           { facingMode: 'environment' },
-          {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
-          },
+          QR_SCAN_CONFIG,
           (decodedText) => {
-            processQR(decodedText);
+            if (!debounceRef.current) processQR(decodedText);
           },
-          () => {
-            // QR not detected in frame — no-op
-          }
+          () => {},
         );
-      } catch (err) {
-        console.error('QR scanner init error:', err);
+        if (cancelled) {
+          await scanner.stop().catch(() => undefined);
+          return;
+        }
+        await enableContinuousFocus(scanner);
+      } catch (error) {
+        console.error('QR scanner init error:', error);
       }
     }, 500);
 
     return () => {
+      cancelled = true;
       clearTimeout(initTimer);
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-      scannerRef.current
-        ?.stop()
-        .catch(() => {});
+      scannerRef.current?.stop().catch(() => undefined);
+      scannerRef.current = null;
     };
   }, [processQR]);
 
-  // ============================================================
-  // STATUS COLORS
-  // ============================================================
   const statusConfig = {
-    ready: {
-      bg: 'var(--color-brand)',
-      icon: <BrandMark size="sm" />,
-    },
+    ready: { bg: 'var(--color-brand-dark)', icon: <QrCode className="h-8 w-8 text-white" /> },
     processing: {
       bg: 'var(--color-warning)',
-      icon: (
-        <div className="h-8 w-8 animate-spin rounded-full border-3 border-white border-t-transparent" />
-      ),
+      icon: <div className="h-8 w-8 animate-spin rounded-full border-3 border-white border-t-transparent" />,
     },
-    success: {
-      bg: 'var(--color-success)',
-      icon: <CheckCircle2 className="h-8 w-8 text-white" />,
-    },
-    error: {
-      bg: 'var(--color-danger)',
-      icon: <XCircle className="h-8 w-8 text-white" />,
-    },
+    pending: { bg: 'var(--color-warning-dark)', icon: <Clock3 className="h-8 w-8 text-white" /> },
+    warning: { bg: 'var(--color-warning-dark)', icon: <AlertTriangle className="h-8 w-8 text-white" /> },
+    error: { bg: 'var(--color-danger)', icon: <XCircle className="h-8 w-8 text-white" /> },
   };
-
   const config = statusConfig[status];
 
-  // ============================================================
-  // RENDER
-  // ============================================================
   return (
-    <main
-      className="flex min-h-dvh flex-col items-center justify-center"
-      style={{ backgroundColor: '#0a0a0a' }}
-    >
-      {/* Gate label with hidden logout */}
-      <div 
-        className="mb-4 text-center cursor-default"
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-[var(--color-scanner-canvas)] px-3 py-5 sm:px-6 sm:py-8">
+      <div
+        className="mb-5 cursor-default text-center"
         onDoubleClick={() => {
-          if (window.confirm('Admin: Sign out of this scanner?')) {
-            auth.signOut();
-          }
+          if (window.confirm('Admin: Sign out of this scanner?')) auth.signOut();
         }}
       >
-        <p className="text-xs font-medium uppercase tracking-widest text-white/50">
-          Entry Scanner
-        </p>
-        <p className="text-sm font-bold text-white">{gate}</p>
+        <div className="mb-2 flex items-center justify-center gap-2">
+          <BrandMark size="sm" />
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--color-accent)]">Entry scanner</p>
+        </div>
+        <h1 className="text-xl font-extrabold text-white sm:text-2xl">{gate}</h1>
+        <p className="mt-1 text-sm text-white/60">Present the visitor QR code to the camera</p>
       </div>
 
-      {/* Scanner viewport */}
-      <div
-        className="relative mb-6 aspect-square w-full max-w-sm overflow-hidden rounded-2xl"
-        style={{ borderRadius: 'var(--radius-xl)' }}
-      >
+      <div className="scanner-viewport relative mb-5 overflow-hidden rounded-2xl border border-white/15 bg-black shadow-lg">
         <div id="entry-qr-reader" className="h-full w-full" />
       </div>
 
-      {/* Status indicator */}
       <div
-        className="flex items-center gap-3 rounded-xl px-6 py-3"
-        style={{
-          backgroundColor: config.bg,
-          borderRadius: 'var(--radius-lg)',
-          transition: 'background-color 200ms ease',
-        }}
+        className="flex min-h-16 w-[min(94vw,40rem)] items-center justify-center gap-3 rounded-xl px-5 py-3 text-center shadow-md sm:w-[min(94vw,64rem)]"
+        style={{ backgroundColor: config.bg, borderRadius: 'var(--radius-lg)', transition: 'background-color 200ms ease' }}
       >
         {config.icon}
-        <span className="text-base font-semibold text-white">
-          {statusMessage}
-        </span>
+        <span className="text-base font-bold text-white sm:text-lg">{statusMessage}</span>
       </div>
 
-      {/* Device not registered warning */}
       {!device && (
-        <div className="mt-6 flex items-center gap-2 rounded-md px-4 py-3 text-sm" style={{ backgroundColor: 'var(--color-danger-light)', color: 'var(--color-danger)', borderRadius: 'var(--radius-sm)' }}>
+        <div className="mt-6 flex items-center gap-2 rounded-md border border-[var(--color-danger)] bg-[var(--color-danger-light)] px-4 py-3 text-sm text-[var(--color-danger)]" role="alert">
           <AlertTriangle className="h-4 w-4" />
           Device not registered. Contact admin.
         </div>

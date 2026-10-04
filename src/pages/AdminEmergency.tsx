@@ -3,12 +3,12 @@ import {
   collection,
   query,
   where,
-  getDocs,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { AlertTriangle, Printer } from 'lucide-react';
 import { format } from 'date-fns';
-import { Card, Input, Button, DataTable, DataTableHead, DataTableRow, DataTableCell } from '@/components/ui';
+import { Card, Input, Select, Button, DataTable, DataTableHead, DataTableRow, DataTableCell, StatusBadge } from '@/components/ui';
 import type { GatePass } from '@/types';
 
 interface GatePassWithId extends GatePass {
@@ -25,26 +25,26 @@ export function AdminEmergency() {
   const gates = Array.from(new Set(passes.map((p) => p.gate).filter(Boolean))) as string[];
 
   useEffect(() => {
-    async function loadInside() {
-      setLoading(true);
-      try {
-        const q = query(
-          collection(db, 'gatePasses'),
-          where('status', '==', 'inside')
-        );
-        const snap = await getDocs(q);
+    const q = query(
+      collection(db, 'gatePasses'),
+      where('status', '==', 'inside')
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
         const list: GatePassWithId[] = [];
         snap.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() } as GatePassWithId);
         });
         setPasses(list);
-      } catch (err) {
+        setLoading(false);
+      },
+      (err) => {
         console.error(err);
-      } finally {
         setLoading(false);
       }
-    }
-    loadInside();
+    );
+    return unsubscribe;
   }, []);
 
   const filteredPasses = passes.filter((p) => {
@@ -63,6 +63,9 @@ export function AdminEmergency() {
               Emergency Evacuation List
             </h1>
           </div>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--color-text-secondary)]">
+            Use this list during an emergency to see which visitors are still inside the premises. Search or filter the list, then print it to help account for everyone during evacuation.
+          </p>
           <p className="mt-1 text-sm font-medium text-[var(--color-danger)]">
             Currently Inside: {passes.length} Visitors
           </p>
@@ -88,9 +91,10 @@ export function AdminEmergency() {
       </div>
 
       <Card className="flex flex-wrap gap-4 p-5 print:hidden">
-        <div className="flex-1 min-w-[200px]">
-          <label className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Search Name</label>
+        <div className="min-w-0 flex-1 sm:min-w-52">
+          <label htmlFor="emergency-visitor-search" className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Search Name</label>
           <Input
+            id="emergency-visitor-search"
             type="text"
             placeholder="Search..."
             value={search}
@@ -98,22 +102,18 @@ export function AdminEmergency() {
           />
         </div>
         
-        <div className="w-48">
+        <div className="w-full sm:w-48">
           <label className="mb-2 block text-sm font-medium text-[var(--color-text-secondary)]">Filter by Entry Gate</label>
-          <select
+          <Select
             value={gateFilter}
             onChange={(e) => setGateFilter(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm outline-none bg-transparent"
-            style={{
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-text-primary)',
-            }}
+            aria-label="Filter by entry gate"
           >
             <option value="">All Gates</option>
             {gates.map((g) => (
               <option key={g} value={g}>{g}</option>
             ))}
-          </select>
+          </Select>
         </div>
       </Card>
 
@@ -122,18 +122,18 @@ export function AdminEmergency() {
         <DataTable>
           <DataTableHead>
             <DataTableRow>
-              <DataTableCell isHeader className="text-[var(--color-danger)] font-bold print:text-black print:px-2">Visitor Name</DataTableCell>
-              <DataTableCell isHeader className="text-[var(--color-danger)] font-bold print:text-black print:px-2">Time In</DataTableCell>
-              <DataTableCell isHeader className="text-[var(--color-danger)] font-bold print:text-black print:px-2">Entry Gate</DataTableCell>
-              <DataTableCell isHeader className="text-[var(--color-danger)] font-bold print:text-black print:px-2">Status</DataTableCell>
-              <DataTableCell isHeader className="text-[var(--color-danger)] font-bold print:text-black print:w-20">Accounted</DataTableCell>
+              <DataTableCell isHeader className="print:px-2 print:text-black">Visitor Name</DataTableCell>
+              <DataTableCell isHeader className="print:px-2 print:text-black">Time In</DataTableCell>
+              <DataTableCell isHeader className="print:px-2 print:text-black">Entry Gate</DataTableCell>
+              <DataTableCell isHeader className="print:px-2 print:text-black">Status</DataTableCell>
+              <DataTableCell isHeader className="print:w-20 print:text-black">Accounted</DataTableCell>
             </DataTableRow>
           </DataTableHead>
           <tbody className="divide-y border-[var(--color-border)] print:divide-black/20">
             {loading ? (
               <tr className="print:hidden">
                 <td colSpan={5} className="py-12 text-center">
-                  <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-danger)]" />
+                  <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-danger)]" role="status" aria-label="Loading evacuation list" />
                 </td>
               </tr>
             ) : filteredPasses.length === 0 ? (
@@ -150,7 +150,7 @@ export function AdminEmergency() {
                     {pass.timeIn ? format(pass.timeIn.toMillis(), 'h:mm a') : '—'}
                   </DataTableCell>
                   <DataTableCell className="print:px-2">{pass.gate || 'Unknown'}</DataTableCell>
-                  <DataTableCell className="text-[var(--color-danger)] font-bold print:text-black print:px-2">INSIDE</DataTableCell>
+                  <DataTableCell className="print:px-2 print:text-black"><StatusBadge status="inside" label="Inside" /></DataTableCell>
                   <DataTableCell className="print:px-2">
                     {/* Checkbox for physical printout marking */}
                     <div className="h-6 w-6 rounded border-2 border-[var(--color-border)] print:border-black" />

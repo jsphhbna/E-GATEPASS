@@ -28,18 +28,18 @@ export function LoginPage() {
     }
   }, [resendCooldown]);
 
-  // Redirect if already authenticated
-  if (status === 'authenticated' && role) {
+  useEffect(() => {
+    if (status !== 'authenticated' || !role) return;
     const redirectMap: Record<string, string> = {
       admin: '/admin',
+      superadmin: '/admin',
       guard: '/guard',
       entry: '/scan/entry',
       exit: '/scan/exit',
       kiosk: '/kiosk',
     };
-    const target = redirectMap[role] ?? '/login';
-    navigate(target, { replace: true });
-  }
+    navigate(redirectMap[role] ?? '/login', { replace: true });
+  }, [navigate, role, status]);
 
   async function handleResendVerification() {
     if (resendCooldown > 0 || !unverifiedEmail || !unverifiedPassword) return;
@@ -71,7 +71,7 @@ export function LoginPage() {
       const userDoc = await getDoc(doc(db, 'users', userCred.user.uid));
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        if ((userData.role === 'admin' || userData.role === 'guard') && userData.active) {
+        if ((userData.role === 'admin' || userData.role === 'superadmin' || userData.role === 'guard') && userData.active) {
           if (!auth.currentUser?.emailVerified) {
             await signOut(auth);
             setUnverifiedEmail(email);
@@ -88,17 +88,18 @@ export function LoginPage() {
       
       // onAuthStateChanged in AuthProvider handles role resolution and redirect
     } catch {
-      setError('Invalid email or password. Please try again.');
+      setError('Invalid email, device username, or password. Please try again.');
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4 bg-[var(--color-canvas)]">
-      <Card className="w-full max-w-sm p-8">
+    <main id="main-content" className="flex min-h-dvh items-center justify-center bg-[var(--color-canvas)] px-4 py-10">
+      <Card className="w-full max-w-sm border-t-4 border-t-[var(--color-brand)] p-6 sm:p-8">
         <div className="mb-8 text-center">
           <BrandMark size="lg" className="mx-auto mb-4" />
+          <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[var(--color-brand)]">Staff and device access</p>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Sign In
           </h1>
@@ -108,7 +109,7 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          <FormField label="Email">
+          <FormField label="Email or Device Username" id="login-email">
             <Input
               id="login-email"
               type="email"
@@ -116,11 +117,11 @@ export function LoginPage() {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="guard@earist.edu.ph"
+              placeholder="guard@earist.edu.ph or device@earist-devices.local"
             />
           </FormField>
 
-          <FormField label="Password">
+          <FormField label="Password" id="login-password">
             <div className="relative">
               <Input
                 id="login-password"
@@ -135,7 +136,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 focus:outline-none"
+                className="absolute inset-y-0 right-0 flex min-w-11 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-brand)] focus:outline-none"
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? (
@@ -148,7 +149,7 @@ export function LoginPage() {
           </FormField>
 
           {error && (
-            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-600 border border-red-200 flex flex-col gap-3">
+            <div className="flex flex-col gap-3 rounded-lg border border-[var(--color-danger)] bg-[var(--color-danger-light)] px-4 py-3 text-sm font-medium text-[var(--color-danger-dark)]">
               <p role="alert">{error}</p>
               {unverifiedEmail && (
                 <Button
@@ -156,7 +157,7 @@ export function LoginPage() {
                   variant="secondary"
                   onClick={handleResendVerification}
                   disabled={resendCooldown > 0 || loading}
-                  className="w-full text-red-700 border-red-300 hover:bg-red-100"
+                  className="w-full border-[var(--color-danger)] text-[var(--color-danger-dark)] hover:bg-white"
                 >
                   {resendCooldown > 0 ? `Resend available in ${resendCooldown}s` : 'Resend Verification Email'}
                 </Button>

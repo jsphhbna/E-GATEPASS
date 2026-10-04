@@ -2,35 +2,41 @@ import { useState, useEffect } from 'react';
 import {
   doc,
   getDoc,
-  setDoc,
-  updateDoc,
-  collection,
-  query,
-  where,
-  getDocs,
 } from 'firebase/firestore';
 import { db, auth } from '@/lib/firebase';
 import { Save, Trash2, AlertTriangle, Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import { Button, Card, Input, ConfirmModal } from '@/components/ui';
+import { Button, Card, Input, ConfirmModal, LoadingState } from '@/components/ui';
+import { PasswordResetCard } from '@/components/ChangePasswordCard';
+import { DEFAULT_REJECTION_REASONS, DEFAULT_VISIT_PURPOSES, normalizeVisitPurposes } from '@/lib/settingsDefaults';
+import type { VisitPurposeOption } from '@/types';
+import { useAuth } from '@/hooks/useAuth';
+import { isSuperAdmin } from '@/lib/permissions';
+import { DEFAULT_WORKING_HOURS, normalizeWorkingHours } from '@/lib/workingHours';
 
 export function AdminSettings() {
+  const { role } = useAuth();
+  const canManageSecuritySettings = isSuperAdmin(role);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [purging, setPurging] = useState(false);
   
   const [settings, setSettings] = useState({
     retentionDays: 30,
+    workingHours: DEFAULT_WORKING_HOURS,
     peakMode: false,
     rejectionReasons: [] as string[],
+    visitPurposes: [] as VisitPurposeOption[],
   });
 
   const [newReason, setNewReason] = useState('');
+  const [newPurpose, setNewPurpose] = useState('');
   
   // Modals state
   const [showPeakModeConfirm, setShowPeakModeConfirm] = useState(false);
   const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
   const [purgeEligibleCount, setPurgeEligibleCount] = useState<number | null>(null);
+  const [purgeRetentionDays, setPurgeRetentionDays] = useState<number | null>(null);
   const [calculatingPurge, setCalculatingPurge] = useState(false);
 
   useEffect(() => {
@@ -38,15 +44,22 @@ export function AdminSettings() {
       try {
         const snap = await getDoc(doc(db, 'settings', 'app'));
         if (snap.exists()) {
-          setSettings(snap.data() as any);
+          const data = snap.data();
+          setSettings({
+            retentionDays: typeof data.retentionDays === 'number' ? data.retentionDays : 30,
+            workingHours: normalizeWorkingHours(data.workingHours),
+            peakMode: data.peakMode === true,
+            rejectionReasons: Array.isArray(data.rejectionReasons) ? data.rejectionReasons : DEFAULT_REJECTION_REASONS,
+            visitPurposes: normalizeVisitPurposes(data.visitPurposes),
+          });
         } else {
-          // Initialize if missing
           const defaultSettings = {
             retentionDays: 30,
+            workingHours: DEFAULT_WORKING_HOURS,
             peakMode: false,
-            rejectionReasons: ['Invalid ID', 'No prior appointment', 'Underage', 'Refused inspection'],
+            rejectionReasons: DEFAULT_REJECTION_REASONS,
+            visitPurposes: DEFAULT_VISIT_PURPOSES,
           };
-          await setDoc(doc(db, 'settings', 'app'), defaultSettings);
           setSettings(defaultSettings);
         }
       } catch (err) {
@@ -60,9 +73,38 @@ export function AdminSettings() {
   }, []);
 
   async function handleSave() {
+    if (settings.workingHours.start >= settings.workingHours.end) {
+      toast.error('Campus opening time must be earlier than closing time');
+      return;
+    }
+    const missingPrompt = settings.visitPurposes.find((purpose) => purpose.requiresDetails && purpose.detailPrompt.trim().length < 3);
+    if (missingPrompt) {
+      toast.error(`Add an instruction for “${missingPrompt.label}” before saving`);
+      return;
+    }
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'settings', 'app'), settings);
+      const operationalSettings = {
+        peakMode: settings.peakMode,
+        rejectionReasons: settings.rejectionReasons,
+        visitPurposes: settings.visitPurposes.map((purpose) => ({
+          ...purpose,
+          detailPrompt: purpose.requiresDetails ? purpose.detailPrompt.trim() : '',
+        })),
+      };
+      const settingsToSave = canManageSecuritySettings
+        ? { ...operationalSettings, retentionDays: settings.retentionDays, workingHours: settings.workingHours }
+        : operationalSettings;
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Your session has expired. Please sign in again.');
+      const response = await fetch('/api/update-settings', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsToSave),
+      });
+      const result = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(result?.error || 'Failed to save settings');
+      setSettings((current) => ({ ...current, ...settingsToSave }));
       toast.success('Settings saved successfully');
     } catch (err) {
       console.error(err);
@@ -92,23 +134,80 @@ export function AdminSettings() {
     }));
   }
 
+  function addPurpose() {
+    const purpose = newPurpose.trim();
+    if (!purpose) return;
+    if (purpose.length < 3) {
+      toast.error('Purpose must be at least 3 characters');
+      return;
+    }
+    if (settings.visitPurposes.some((item) => item.label.toLocaleLowerCase() === purpose.toLocaleLowerCase())) {
+      toast.error('Purpose already exists');
+      return;
+    }
+    setSettings((previous) => ({
+      ...previous,
+      visitPurposes: [...previous.visitPurposes, { label: purpose, requiresDetails: false, detailPrompt: '' }],
+    }));
+    setNewPurpose('');
+  }
+
+  function removePurpose(purpose: string) {
+    setSettings((previous) => ({
+      ...previous,
+      visitPurposes: previous.visitPurposes.filter((item) => item.label !== purpose),
+    }));
+  }
+
+  function togglePurposeDetails(label: string) {
+    setSettings((previous) => ({
+      ...previous,
+      visitPurposes: previous.visitPurposes.map((purpose) => purpose.label === label
+        ? {
+            ...purpose,
+            requiresDetails: !purpose.requiresDetails,
+            detailPrompt: !purpose.requiresDetails && !purpose.detailPrompt
+              ? 'What should the visitor specify?'
+              : purpose.detailPrompt,
+          }
+        : purpose),
+    }));
+  }
+
+  function updatePurposePrompt(label: string, detailPrompt: string) {
+    setSettings((previous) => ({
+      ...previous,
+      visitPurposes: previous.visitPurposes.map((purpose) => purpose.label === label
+        ? { ...purpose, detailPrompt }
+        : purpose),
+    }));
+  }
+
   // ============================================================
   // PURGE IMAGES
   // ============================================================
   async function handlePurgeClick() {
     setCalculatingPurge(true);
     try {
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - settings.retentionDays);
-      const q = query(
-        collection(db, 'visitors'),
-        where('createdAt', '<', cutoffDate)
-      );
-      const snapshot = await getDocs(q);
-      
-      const unpurged = snapshot.docs.filter(d => !d.data().imagesPurgedAt);
-      
-      setPurgeEligibleCount(unpurged.length);
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const res = await fetch('/api/purge-images', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ dryRun: true }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Could not check which images are ready for deletion');
+      }
+
+      const data = await res.json() as { visitorsAffected: number; retentionDays: number };
+      setPurgeEligibleCount(data.visitorsAffected);
+      setPurgeRetentionDays(data.retentionDays);
       setShowPurgeConfirm(true);
     } catch (err) {
       console.error('Dry run failed', err);
@@ -125,6 +224,7 @@ export function AdminSettings() {
       if (!token) throw new Error('Not authenticated');
 
       let totalPurged = 0;
+      let totalFailed = 0;
       let hasMore = true;
 
       while (hasMore) {
@@ -140,18 +240,30 @@ export function AdminSettings() {
           throw new Error(`Purge failed: ${res.status} - ${text}`);
         }
 
-        const data = await res.json();
+        const data = await res.json() as {
+          successCount: number;
+          failedCount: number;
+          orphanDeletedCount?: number;
+          orphanFailedCount?: number;
+          hasMore: boolean;
+        };
         
-        if (data.successCount > 0) {
-          totalPurged += data.successCount;
+        totalPurged += data.successCount;
+        totalFailed += data.failedCount + (data.orphanFailedCount || 0);
+
+        if (data.failedCount > 0 || (data.orphanFailedCount || 0) > 0) {
+          throw new Error(
+            `Images were deleted for ${totalPurged} visitor${totalPurged === 1 ? '' : 's'}, but ${totalFailed} could not be completed. The failed records were not marked as deleted. Please try again.`
+          );
         }
 
-        if (data.successCount === 0 || data.count === 0) {
-          hasMore = false;
+        hasMore = data.hasMore;
+        if (hasMore && data.successCount + (data.orphanDeletedCount || 0) === 0) {
+          throw new Error('Image deletion could not continue. Please try again.');
         }
       }
 
-      toast.success(`Purge complete: ${totalPurged} visitors purged.`);
+      toast.success(`Images deleted for ${totalPurged} visitor${totalPurged === 1 ? '' : 's'}.`);
       setShowPurgeConfirm(false);
     } catch (err: any) {
       console.error(err);
@@ -172,15 +284,11 @@ export function AdminSettings() {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-32 items-center justify-center">
-        <div className="h-6 w-6 animate-spin rounded-full border-3 border-[var(--color-brand)] border-t-transparent" />
-      </div>
-    );
+    return <LoadingState label="Loading system settings" className="h-32" />;
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
@@ -199,74 +307,196 @@ export function AdminSettings() {
         </Button>
       </div>
 
-      <div className="grid gap-6">
-        
-        {/* Retention Policy */}
-        <Card className="p-6">
-          <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Data Retention</h2>
-          
-          <div className="mb-8">
-             <label className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Visitor Data Retention (Days)</label>
-             <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
-               How long visitor ID and photos are kept before they are eligible for deletion.
-             </p>
-             <div className="w-full max-w-[200px]">
-               <Input
-                 type="number"
-                 min={1}
-                 value={settings.retentionDays}
-                 onChange={(e) => setSettings({ ...settings, retentionDays: parseInt(e.target.value) || 30 })}
-               />
-             </div>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <div className="grid content-start gap-6">
+          <Card className="p-6">
+          <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Campus Access Hours</h2>
+          <p className="mb-5 mt-2 text-sm leading-relaxed text-[var(--color-text-secondary)]">
+            Gate passes use these hours for the selected visit date in Asia/Manila. Only a Super Admin can change this global policy.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="working-hours-start" className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Opens</label>
+              <Input
+                id="working-hours-start"
+                type="time"
+                value={settings.workingHours.start}
+                disabled={!canManageSecuritySettings}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  workingHours: { ...current.workingHours, start: event.target.value },
+                }))}
+              />
+            </div>
+            <div>
+              <label htmlFor="working-hours-end" className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Closes</label>
+              <Input
+                id="working-hours-end"
+                type="time"
+                value={settings.workingHours.end}
+                disabled={!canManageSecuritySettings}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  workingHours: { ...current.workingHours, end: event.target.value },
+                }))}
+              />
+            </div>
           </div>
+          <p className="mt-4 text-xs font-semibold text-[var(--color-text-muted)]">Timezone: Asia/Manila (UTC+08:00)</p>
+          </Card>
 
-          <div className="rounded-lg border border-red-200 bg-red-50 p-5 dark:border-red-900/50 dark:bg-red-900/10">
-            <div className="flex items-start gap-4">
-              <AlertTriangle className="mt-0.5 h-6 w-6 text-red-600 dark:text-red-500 flex-shrink-0" />
-              <div>
-                <h3 className="font-semibold text-lg text-red-800 dark:text-red-400">Purge Eligible Images</h3>
-                <p className="mt-2 text-sm text-red-700 dark:text-red-300">
-                  Permanently deletes Cloudinary images for visitors older than {settings.retentionDays} days. 
-                  This action cannot be undone. Firestore sets <code className="bg-red-100 dark:bg-red-800/50 px-1.5 py-0.5 rounded font-mono text-xs">imagesPurgedAt</code> only upon successful deletion.
+          {/* Peak Mode */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Peak Mode</h2>
+                <p className="mt-2 text-sm leading-relaxed text-[var(--color-text-secondary)]">
+                  When enabled, visitors are not required to upload a government ID, helping speed up the queue.
                 </p>
-                <Button
-                  variant="destructive"
-                  onClick={handlePurgeClick}
-                  disabled={purging || calculatingPurge}
-                  loading={calculatingPurge}
-                  className="mt-4"
-                  icon={<Trash2 className="h-4 w-4" />}
-                >
-                  {calculatingPurge ? 'Calculating...' : purging ? 'Purging...' : 'Run Purge Now'}
-                </Button>
+              </div>
+              <button
+                type="button"
+                onClick={togglePeakMode}
+                className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 ${
+                  settings.peakMode ? 'bg-[var(--color-brand)]' : 'bg-[var(--color-border-strong)]'
+                }`}
+                role="switch"
+                aria-checked={settings.peakMode}
+                aria-label="Peak mode"
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                    settings.peakMode ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </Card>
+
+          <PasswordResetCard />
+        </div>
+
+        <div className="grid content-start gap-6">
+          {/* Retention Policy */}
+          {canManageSecuritySettings && <Card className="p-6">
+            <h2 className="mb-5 text-xl font-bold text-[var(--color-text-primary)]">Data Retention</h2>
+
+            <div className="mb-8">
+              <label htmlFor="retention-days" className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">Visitor Data Retention (Days)</label>
+              <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
+                How long visitor ID and photos are kept before they are eligible for deletion.
+              </p>
+              <div className="w-full max-w-[200px]">
+                <Input
+                  id="retention-days"
+                  type="number"
+                  min={1}
+                  value={settings.retentionDays}
+                  onChange={(e) => setSettings({ ...settings, retentionDays: parseInt(e.target.value) || 30 })}
+                />
               </div>
             </div>
-          </div>
-        </Card>
 
-        {/* Peak Mode */}
-        <Card className="p-6">
-          <div className="flex items-center justify-between">
-            <div className="pr-8">
-              <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Peak Mode</h2>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                When enabled, visitors are NOT required to upload a government ID to speed up the queue.
-              </p>
+            <div className="rounded-lg border border-[var(--color-danger)] bg-[var(--color-danger-light)] p-5">
+              <div className="flex items-start gap-4">
+                <AlertTriangle className="mt-0.5 h-6 w-6 flex-shrink-0 text-[var(--color-danger)]" />
+                <div>
+                  <h3 className="text-lg font-semibold text-[var(--color-danger-dark)]">Purge Eligible Images</h3>
+                  <p className="mt-2 text-sm text-[var(--color-danger-dark)]">
+                    Permanently deletes visitor photos and ID images older than {settings.retentionDays} days. Visitor details and visit history are kept. This action cannot be undone.
+                  </p>
+                  <Button
+                    variant="destructive"
+                    onClick={handlePurgeClick}
+                    disabled={purging || calculatingPurge}
+                    loading={calculatingPurge}
+                    className="mt-4"
+                    icon={<Trash2 className="h-4 w-4" />}
+                  >
+                    {calculatingPurge ? 'Calculating...' : purging ? 'Purging...' : 'Run Purge Now'}
+                  </Button>
+                </div>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={togglePeakMode}
-              className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors ${
-                settings.peakMode ? 'bg-[var(--color-brand)]' : 'bg-gray-300 dark:bg-gray-700'
-              }`}
-            >
-              <span
-                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                  settings.peakMode ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
+          </Card>}
+
+        {/* Visit Purposes */}
+        <Card className="p-6">
+          <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Premade Visit Purposes</h2>
+          <p className="mb-5 mt-2 text-sm text-[var(--color-text-secondary)]">
+            Visitors can choose these options when requesting a gate pass. They can still select Other and type their own purpose.
+          </p>
+
+          <ul className="divide-y overflow-hidden rounded-lg border border-[var(--color-border)]">
+            {settings.visitPurposes.map((purpose, index) => (
+              <li key={purpose.label} className="p-4 transition-colors hover:bg-[var(--color-canvas)]">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-sm font-medium text-[var(--color-text-primary)]">{purpose.label}</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => togglePurposeDetails(purpose.label)}
+                      aria-pressed={purpose.requiresDetails}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
+                        purpose.requiresDetails
+                          ? 'border-[var(--color-brand)] bg-[var(--color-brand-light)] text-[var(--color-brand)]'
+                          : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-canvas)]'
+                      }`}
+                    >
+                      {purpose.requiresDetails ? 'Details required' : 'Require details'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removePurpose(purpose.label)}
+                      className="rounded-md p-1.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+                      aria-label={`Remove ${purpose.label}`}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                {purpose.requiresDetails && (
+                  <div className="mt-3">
+                    <label htmlFor={`purpose-prompt-${index}`} className="mb-1.5 block text-xs font-semibold text-[var(--color-text-secondary)]">
+                      What should the visitor specify?
+                    </label>
+                    <Input
+                      id={`purpose-prompt-${index}`}
+                      value={purpose.detailPrompt}
+                      onChange={(event) => updatePurposePrompt(purpose.label, event.target.value)}
+                      maxLength={160}
+                      placeholder="e.g. Who is your appointment with?"
+                    />
+                  </div>
+                )}
+              </li>
+            ))}
+            {settings.visitPurposes.length === 0 && (
+              <li className="p-6 text-center text-sm text-[var(--color-text-muted)]">No visit purposes configured</li>
+            )}
+
+            <li className="flex gap-3 border-t border-[var(--color-border)] bg-[var(--color-canvas)] p-4">
+              <div className="flex-1">
+                <Input
+                  type="text"
+                  value={newPurpose}
+                  onChange={(event) => setNewPurpose(event.target.value)}
+                  placeholder="Add visit purpose..."
+                  maxLength={100}
+                  aria-label="New visit purpose"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      addPurpose();
+                    }
+                  }}
+                />
+              </div>
+              <Button onClick={addPurpose} variant="secondary" icon={<Plus className="h-4 w-4" />}>
+                Add
+              </Button>
+            </li>
+          </ul>
         </Card>
 
         {/* Rejection Reasons */}
@@ -291,13 +521,14 @@ export function AdminSettings() {
               <li className="p-6 text-center text-sm text-[var(--color-text-muted)]">No reasons configured</li>
             )}
             
-            <li className="flex gap-3 p-4 bg-gray-50 dark:bg-gray-800/20 border-t border-[var(--color-border)]">
+            <li className="flex gap-3 border-t border-[var(--color-border)] bg-[var(--color-canvas)] p-4">
               <div className="flex-1">
                 <Input
                   type="text"
                   value={newReason}
                   onChange={(e) => setNewReason(e.target.value)}
                   placeholder="Add new reason..."
+                  aria-label="New rejection reason"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
@@ -317,15 +548,16 @@ export function AdminSettings() {
           </ul>
         </Card>
 
+        </div>
       </div>
       
       <ConfirmModal
-        isOpen={showPurgeConfirm}
+        isOpen={canManageSecuritySettings && showPurgeConfirm}
         onClose={() => setShowPurgeConfirm(false)}
         title="Purge Images?"
         description={
           <>
-            You are about to permanently delete Cloudinary images for <strong className="text-[var(--color-text-primary)]">{purgeEligibleCount}</strong> visitor{purgeEligibleCount === 1 ? '' : 's'} older than {settings.retentionDays} days.
+            You are about to permanently delete photos and ID images for <strong className="text-[var(--color-text-primary)]">{purgeEligibleCount}</strong> visitor{purgeEligibleCount === 1 ? '' : 's'} older than {purgeRetentionDays ?? settings.retentionDays} days. Visitor details and visit history will remain.
             This action cannot be undone.
           </>
         }

@@ -7,13 +7,13 @@ import { toast } from 'sonner';
 import { Button, Modal } from '@/components/ui';
 
 export function PrivacyModal() {
-  const { uid, userData } = useAuth();
+  const { status, uid, userData } = useAuth();
   const [loading, setLoading] = useState(false);
   const [accepted, setAccepted] = useState(false);
 
-  // Only show if user is admin/guard and hasn't accepted yet
-  if (!uid || !userData || !('privacyAcceptedAt' in userData)) return null;
-  if (userData.role !== 'admin' && userData.role !== 'guard') return null;
+  // Only show if a staff user has not accepted yet.
+  if (status !== 'authenticated' || !uid || !userData || !('privacyAcceptedAt' in userData)) return null;
+  if (userData.role !== 'admin' && userData.role !== 'superadmin' && userData.role !== 'guard') return null;
   if (userData.privacyAcceptedAt !== null || accepted) return null;
 
   async function handleAccept() {
@@ -42,7 +42,7 @@ export function PrivacyModal() {
       size="sm"
     >
       <div className="space-y-6">
-        <div className="rounded-xl bg-gray-50 dark:bg-gray-800/50 p-4 text-center">
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas)] p-4 text-center">
           <BrandMark size="sm" />
           <p className="mt-4 text-sm text-[var(--color-text-secondary)] text-left">
             As a staff member of EARIST, you have access to sensitive visitor data including government IDs and webcam photos. By continuing, you agree to:
@@ -51,15 +51,15 @@ export function PrivacyModal() {
 
         <ul className="space-y-3 text-sm text-[var(--color-text-primary)] font-medium">
           <li className="flex gap-2">
-            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            <span className="text-[var(--color-brand)]">•</span>
             Never download or export visitor IDs for personal use.
           </li>
           <li className="flex gap-2">
-            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            <span className="text-[var(--color-brand)]">•</span>
             Only access records necessary for your immediate duties.
           </li>
           <li className="flex gap-2">
-            <span style={{ color: 'var(--color-brand)' }}>•</span>
+            <span className="text-[var(--color-brand)]">•</span>
             Understand that all actions and scans are permanently logged and audited.
           </li>
         </ul>

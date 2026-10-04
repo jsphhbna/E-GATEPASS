@@ -12,13 +12,11 @@ export function ForgotPasswordPage() {
   const [countdown, setCountdown] = useState(0);
 
   useEffect(() => {
-    let timer: any;
-    if (countdown > 0) {
-      timer = setInterval(() => {
-        setCountdown((prev) => prev - 1);
-      }, 1000);
-    }
-    return () => clearInterval(timer);
+    if (countdown <= 0) return;
+    const timer = window.setTimeout(() => {
+      setCountdown((previous) => Math.max(0, previous - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
   }, [countdown]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -59,10 +57,11 @@ export function ForgotPasswordPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4 bg-[var(--color-canvas)]">
-      <Card className="w-full max-w-sm p-8 shadow-sm">
+    <main id="main-content" className="flex min-h-dvh items-center justify-center bg-[var(--color-canvas)] px-4 py-10">
+      <Card className="w-full max-w-sm border-t-4 border-t-[var(--color-brand)] p-6 sm:p-8">
         <div className="mb-8 text-center">
           <BrandMark size="lg" className="mx-auto mb-4" />
+          <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[var(--color-brand)]">Account recovery</p>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
             Forgot Password
           </h1>
@@ -72,7 +71,7 @@ export function ForgotPasswordPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          <FormField label="Email">
+          <FormField label="Email" id="reset-email">
             <Input
               id="reset-email"
               type="email"

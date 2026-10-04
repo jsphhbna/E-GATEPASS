@@ -15,7 +15,8 @@ A comprehensive web-based visitor management system for EARIST, utilizing Fireba
 ## Local Development
 
 ### Requirements
-- Node.js (v18+)
+- Node.js 22 or newer (required by the installed Firebase Admin SDK)
+- Java 11 or newer (required for the Firebase emulator test suite)
 - Firebase CLI (`npm install -g firebase-tools`)
 - Netlify CLI (`npm install -g netlify-cli`)
 
@@ -73,9 +74,13 @@ Netlify will output a live URL (e.g., `https://earist-egatepass-xyz.netlify.app`
 
 ## Architecture & Security Rules
 
-- **Firebase Auth**: Used for RBAC (Role-Based Access Control). Roles include `admin`, `guard`, `entry` (device), `exit` (device), and `kiosk` (device).
-- **Firestore Rules**: Strict security rules ensure unauthenticated users can only create pending `gatePasses`, while guards/admins have read/write access. Device accounts are restricted to modifying `status` fields.
+- **Firebase Auth and Firestore roles**: Staff roles are `guard`, `admin`, and `superadmin`; device roles are `entry`, `exit`, and `kiosk`. Sensitive role and account-status changes are authorized and audited by backend functions.
+- **Firestore Rules**: Direct privilege escalation is denied. Guards retain visitor-operation access, Admins retain daily operational administration, and Super Admins control security-sensitive administration.
 - **Netlify Functions**: Secure proxy (`/api/image`) ensures Cloudinary images are only accessible to authenticated staff, preventing public exposure of visitor IDs.
+
+### First Super Admin
+
+There is no public bootstrap endpoint. Select exactly one existing active Admin and follow the one-time Firebase Console procedure in [First Super Admin Bootstrap](docs/SUPER_ADMIN_BOOTSTRAP.md). Do not automatically promote all existing Admins.
 
 ## License
 Proprietary / Closed Source - EARIST.

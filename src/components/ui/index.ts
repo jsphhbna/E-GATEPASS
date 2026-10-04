@@ -12,3 +12,4 @@ export * from './EmptyState';
 export * from './StatCard';
 export * from './PageShell';
 export * from './Stepper';
+export * from './FeedbackState';

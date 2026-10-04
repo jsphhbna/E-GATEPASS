@@ -10,6 +10,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { toast } from 'sonner';
 import type { AppUser, AuthRole, AuthState, Device } from '@/types';
+import { isUserRole } from '@/lib/permissions';
 
 const AuthContext = createContext<AuthState>({
   status: 'loading',
@@ -38,7 +39,7 @@ async function resolveRole(
   const userDoc = await getDoc(doc(db, 'users', user.uid));
   if (userDoc.exists()) {
     const data = userDoc.data() as AppUser;
-    if (data.active) {
+    if (data.active && isUserRole(data.role)) {
       return { role: data.role, userData: data };
     }
     // Inactive user — treat as unauthenticated
@@ -87,7 +88,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       try {
         const { role, userData } = await resolveRole(user);
 
-        if (role === 'admin' || role === 'guard') {
+        if (role === 'admin' || role === 'superadmin' || role === 'guard') {
           await user.reload();
           if (!auth.currentUser?.emailVerified) {
             await signOut(auth);

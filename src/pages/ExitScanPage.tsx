@@ -1,23 +1,16 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  doc,
-  getDoc,
-  runTransaction,
-  serverTimestamp,
-  addDoc,
-  collection,
-} from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { auth } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 import { Html5Qrcode } from 'html5-qrcode';
 import { toast } from 'sonner';
 import { LogOut as LogOutIcon, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
-import type { GatePass, Device } from '@/types';
+import type { Device } from '@/types';
+import { createOptimizedQrScanner, enableContinuousFocus, QR_SCAN_CONFIG } from '@/lib/qrScanner';
 
-type ScanStatus = 'ready' | 'processing' | 'success' | 'error';
+type ScanStatus = 'ready' | 'processing' | 'success' | 'warning' | 'error';
 
 export function ExitScanPage() {
-  const { uid, userData } = useAuth();
+  const { userData } = useAuth();
   const [status, setStatus] = useState<ScanStatus>('ready');
   const [statusMessage, setStatusMessage] = useState('Scan QR to exit');
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -27,220 +20,119 @@ export function ExitScanPage() {
   const device = userData as Device | null;
   const gate = device?.gate ?? 'Unknown Gate';
 
-  // ============================================================
-  // PROCESS SCANNED QR
-  // ============================================================
-  const processQR = useCallback(
-    async (passId: string) => {
-      if (debounceRef.current) return;
-      debounceRef.current = true;
+  const processQR = useCallback(async (passId: string) => {
+    if (debounceRef.current) return;
+    debounceRef.current = true;
+    if ('vibrate' in navigator) navigator.vibrate(50);
+    setStatus('processing');
+    setStatusMessage('Verifying…');
 
-      setStatus('processing');
-      setStatusMessage('Verifying…');
-
-      try {
-        const passRef = doc(db, 'gatePasses', passId);
-        const passSnap = await getDoc(passRef);
-
-        if (!passSnap.exists()) {
-          throw { code: 'not_found', message: 'QR code not recognized' };
-        }
-
-        const pass = passSnap.data() as GatePass;
-
-        switch (pass.status) {
-          case 'inside': {
-            // inside → exited (exit scan)
-            await runTransaction(db, async (transaction) => {
-              const freshSnap = await transaction.get(passRef);
-              if (!freshSnap.exists()) throw new Error('Pass deleted');
-              const freshData = freshSnap.data() as GatePass;
-
-              if (freshData.status !== 'inside') {
-                throw { code: 'not_inside', message: 'Visitor is not currently inside' };
-              }
-
-              transaction.update(passRef, {
-                status: 'exited',
-                timeOut: serverTimestamp(),
-                exitDeviceId: uid,
-              });
-            });
-
-            await addDoc(collection(db, 'visitLogs'), {
-              passToken: passId,
-              visitorId: pass.visitorId,
-              event: 'scan_exit',
-              reason: null,
-              deviceId: uid,
-              gate,
-              guardUid: null,
-              timestamp: serverTimestamp(),
-            });
-
-            setStatus('success');
-            setStatusMessage('Exit recorded. Goodbye!');
-            toast.success('Exit recorded successfully', {
-              style: {
-                backgroundColor: '#16a34a',
-                color: '#fff',
-                fontSize: '18px',
-                fontWeight: 'bold',
-              },
-            });
-            break;
-          }
-
-          case 'issued':
-            throw { code: 'not_entered', message: 'Visitor has not entered yet' };
-
-          case 'pending':
-            throw { code: 'pending', message: 'Entry is still pending approval' };
-
-          case 'rejected':
-            throw { code: 'rejected', message: 'This pass was rejected' };
-
-          case 'exited':
-            throw { code: 'already_exited', message: 'Visitor has already exited' };
-
-          case 'expired':
-            throw { code: 'expired', message: 'This pass has expired' };
-
-          default:
-            throw { code: 'unknown', message: 'Unknown pass status' };
-        }
-      } catch (err: unknown) {
-        const errObj = err as { code?: string; message?: string };
-        const message = errObj.message ?? 'Scan failed';
-        setStatus('error');
-        setStatusMessage(message);
-        toast.error(message, {
-          style: {
-            backgroundColor: '#dc2626',
-            color: '#fff',
-            fontSize: '18px',
-            fontWeight: 'bold',
-          },
-        });
-
-        if (errObj.code) {
-          await addDoc(collection(db, 'visitLogs'), {
-            passToken: passId,
-            visitorId: null,
-            event: 'invalid_scan',
-            reason: message,
-            deviceId: uid,
-            gate,
-            guardUid: null,
-            timestamp: serverTimestamp(),
-          }).catch(() => {});
-        }
-      } finally {
-        resetTimerRef.current = setTimeout(() => {
-          setStatus('ready');
-          setStatusMessage('Scan QR to exit');
-          debounceRef.current = false;
-        }, 3000);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw { code: 'unauthorized', message: 'Device session has expired' };
+      const response = await fetch('/api/scan-pass', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passId, mode: 'exit' }),
+      });
+      const result = await response.json().catch(() => null) as { code?: string; error?: string; message?: string } | null;
+      if (!response.ok) {
+        throw { code: result?.code || 'scan_failed', message: result?.error || 'Scan failed' };
       }
-    },
-    [uid, gate]
-  );
+      setStatus('success');
+      setStatusMessage(result?.message || 'Exit recorded. Goodbye!');
+      toast.success('Exit recorded successfully');
+    } catch (error: unknown) {
+      const scanError = error as { code?: string; message?: string };
+      const message = scanError.message ?? 'Scan failed';
+      const warningCodes = ['not_entered', 'pending', 'already_exited'];
+      setStatus(warningCodes.includes(scanError.code || '') ? 'warning' : 'error');
+      setStatusMessage(message);
+      toast.error(message);
+    } finally {
+      resetTimerRef.current = setTimeout(() => {
+        setStatus('ready');
+        setStatusMessage('Scan QR to exit');
+        debounceRef.current = false;
+      }, 3000);
+    }
+  }, []);
 
-  // ============================================================
-  // QR SCANNER LIFECYCLE
-  // ============================================================
   useEffect(() => {
     const scannerId = 'exit-qr-reader';
-
+    let cancelled = false;
     const initTimer = setTimeout(async () => {
       try {
-        const scanner = new Html5Qrcode(scannerId);
+        const scanner = createOptimizedQrScanner(scannerId);
         scannerRef.current = scanner;
-
         await scanner.start(
           { facingMode: 'environment' },
-          {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
-          },
+          QR_SCAN_CONFIG,
           (decodedText) => {
-            processQR(decodedText);
+            if (!debounceRef.current) processQR(decodedText);
           },
-          () => {}
+          () => {},
         );
-      } catch (err) {
-        console.error('QR scanner init error:', err);
+        if (cancelled) {
+          await scanner.stop().catch(() => undefined);
+          return;
+        }
+        await enableContinuousFocus(scanner);
+      } catch (error) {
+        console.error('QR scanner init error:', error);
       }
     }, 500);
 
     return () => {
+      cancelled = true;
       clearTimeout(initTimer);
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-      scannerRef.current?.stop().catch(() => {});
+      scannerRef.current?.stop().catch(() => undefined);
+      scannerRef.current = null;
     };
   }, [processQR]);
 
   const statusConfig = {
-    ready: {
-      bg: 'var(--color-brand)',
-      icon: <LogOutIcon className="h-8 w-8 text-white" />,
-    },
+    ready: { bg: 'var(--color-brand-dark)', icon: <LogOutIcon className="h-8 w-8 text-white" /> },
     processing: {
       bg: 'var(--color-warning)',
       icon: <div className="h-8 w-8 animate-spin rounded-full border-3 border-white border-t-transparent" />,
     },
-    success: {
-      bg: 'var(--color-success)',
-      icon: <CheckCircle2 className="h-8 w-8 text-white" />,
-    },
-    error: {
-      bg: 'var(--color-danger)',
-      icon: <XCircle className="h-8 w-8 text-white" />,
-    },
+    success: { bg: 'var(--color-success)', icon: <CheckCircle2 className="h-8 w-8 text-white" /> },
+    warning: { bg: 'var(--color-warning-dark)', icon: <AlertTriangle className="h-8 w-8 text-white" /> },
+    error: { bg: 'var(--color-danger)', icon: <XCircle className="h-8 w-8 text-white" /> },
   };
-
   const config = statusConfig[status];
 
   return (
-    <main
-      className="flex min-h-dvh flex-col items-center justify-center"
-      style={{ backgroundColor: '#0a0a0a' }}
-    >
-      <div 
-        className="mb-4 text-center cursor-default"
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-[var(--color-scanner-canvas)] px-3 py-5 sm:px-6 sm:py-8">
+      <div
+        className="mb-5 cursor-default text-center"
         onDoubleClick={() => {
-          if (window.confirm('Admin: Sign out of this scanner?')) {
-            auth.signOut();
-          }
+          if (window.confirm('Admin: Sign out of this scanner?')) auth.signOut();
         }}
       >
-        <p className="text-xs font-medium uppercase tracking-widest text-white/50">
-          Exit Scanner
-        </p>
-        <p className="text-sm font-bold text-white">{gate}</p>
+        <div className="mb-2 inline-flex rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1">
+          <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-[var(--color-accent)]">Exit scanner</p>
+        </div>
+        <h1 className="text-xl font-extrabold text-white sm:text-2xl">{gate}</h1>
+        <p className="mt-1 text-sm text-white/60">Scan the visitor pass to record departure</p>
       </div>
 
-      <div
-        className="relative mb-6 aspect-square w-full max-w-sm overflow-hidden rounded-2xl"
-        style={{ borderRadius: 'var(--radius-xl)' }}
-      >
+      <div className="scanner-viewport relative mb-5 overflow-hidden rounded-2xl border border-[var(--color-accent)]/30 bg-black shadow-lg">
         <div id="exit-qr-reader" className="h-full w-full" />
       </div>
 
       <div
-        className="flex items-center gap-3 rounded-xl px-6 py-3"
-        style={{
-          backgroundColor: config.bg,
-          borderRadius: 'var(--radius-lg)',
-          transition: 'background-color 200ms ease',
-        }}
+        className="flex min-h-16 w-[min(94vw,40rem)] items-center justify-center gap-3 rounded-xl px-5 py-3 text-center shadow-md sm:w-[min(94vw,64rem)]"
+        style={{ backgroundColor: config.bg, borderRadius: 'var(--radius-lg)', transition: 'background-color 200ms ease' }}
       >
         {config.icon}
-        <span className="text-base font-semibold text-white">{statusMessage}</span>
+        <span className="text-base font-bold text-white sm:text-lg">{statusMessage}</span>
       </div>
 
       {!device && (
-        <div className="mt-6 flex items-center gap-2 rounded-md px-4 py-3 text-sm" style={{ backgroundColor: 'var(--color-danger-light)', color: 'var(--color-danger)', borderRadius: 'var(--radius-sm)' }}>
+        <div className="mt-6 flex items-center gap-2 rounded-md border border-[var(--color-danger)] bg-[var(--color-danger-light)] px-4 py-3 text-sm text-[var(--color-danger)]" role="alert">
           <AlertTriangle className="h-4 w-4" />
           Device not registered. Contact admin.
         </div>

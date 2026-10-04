@@ -2,10 +2,10 @@ import { useState, useRef, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { doc, setDoc, getDoc, serverTimestamp, Timestamp, collection } from 'firebase/firestore';
+import { collection, doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { useWebcam } from '@/hooks/useWebcam';
-import { compressImageToWebP, uploadToCloudinary } from '@/lib/cloudinary';
+import { cleanupUploadedImages, compressImageToWebP, uploadToCloudinary } from '@/lib/cloudinary';
 import { toDataURL } from 'qrcode';
 import {
   Camera,
@@ -19,9 +19,13 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { format, parse, startOfDay, set as setDate } from 'date-fns';
-import { Button, Card, Input, Textarea, FormField, Stepper } from '@/components/ui';
+import { format } from 'date-fns';
+import { Button, Card, Input, FormField, Stepper } from '@/components/ui';
 import { BrandMark } from '@/components/BrandMark';
+import { VisitPurposeField } from '@/components/VisitPurposeField';
+import { DEFAULT_VISIT_PURPOSES, normalizeVisitPurposes } from '@/lib/settingsDefaults';
+import type { VisitPurposeOption } from '@/types';
+import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, normalizeWorkingHours } from '@/lib/workingHours';
 
 const nameRegex = /^[\p{L}\s\-'.]+$/u;
 
@@ -73,12 +77,18 @@ export function KioskPage() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isPeakMode, setIsPeakMode] = useState(false);
+  const [visitPurposes, setVisitPurposes] = useState<VisitPurposeOption[]>(DEFAULT_VISIT_PURPOSES);
+  const [workingHours, setWorkingHours] = useState(DEFAULT_WORKING_HOURS);
+  const [issuedValidity, setIssuedValidity] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'app')).then((docSnap) => {
-      if (docSnap.exists() && docSnap.data().peakMode) {
-        setIsPeakMode(true);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setIsPeakMode(data.peakMode === true);
+        setVisitPurposes(normalizeVisitPurposes(data.visitPurposes));
+        setWorkingHours(normalizeWorkingHours(data.workingHours));
       }
     });
   }, []);
@@ -90,14 +100,18 @@ export function KioskPage() {
     handleSubmit,
     getValues,
     reset,
+    setValue,
+    watch,
     formState: { errors, isValid },
   } = useForm<KioskPassFormData>({
     resolver: zodResolver(kioskPassSchema),
     mode: 'onChange',
     defaultValues: {
       visitDate: format(new Date(), 'yyyy-MM-dd'),
+      purpose: '',
     },
   });
+  const purpose = watch('purpose');
 
   const today = format(new Date(), 'yyyy-MM-dd');
 
@@ -157,71 +171,53 @@ export function KioskPage() {
     setStep('generating');
     setSubmitError(null);
 
+    const uploadedPublicIds: string[] = [];
     try {
       const user = auth.currentUser;
       if (!user) throw new Error('Kiosk device not authenticated');
-      const uid = user.uid;
 
-      const uploads = [uploadToCloudinary(photoBlob, 'e-gatepass/photos')];
+      const trackedUpload = async (blob: Blob, folder: 'e-gatepass/photos' | 'e-gatepass/ids') => {
+        const publicId = await uploadToCloudinary(blob, folder);
+        uploadedPublicIds.push(publicId);
+        return publicId;
+      };
+      const uploads = [trackedUpload(photoBlob, 'e-gatepass/photos')];
       if (idBlob) {
-        uploads.push(uploadToCloudinary(idBlob, 'e-gatepass/ids'));
+        uploads.push(trackedUpload(idBlob, 'e-gatepass/ids'));
       }
       const [photoPublicId, idImagePublicId] = await Promise.all(uploads);
 
       const formData = getValues();
       const visitorRef = doc(collection(db, 'visitors'));
       const visitorId = visitorRef.id;
-
-      const composedFullName = [formData.firstName, formData.middleName, formData.lastName]
-        .filter(Boolean)
-        .join(' ')
-        .replace(/\s+/g, ' ');
-
-      await setDoc(visitorRef, {
-        firstName: formData.firstName,
-        middleName: formData.middleName || '',
-        lastName: formData.lastName,
-        fullName: composedFullName,
-        contactNumber: formData.contactNumber,
-        purpose: formData.purpose,
-        visitDate: formData.visitDate,
-        idImagePublicId: idImagePublicId || null,
-        photoPublicId,
-        consentAcceptedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        createdByUid: uid, // kiosk device uid
-        imagesPurgedAt: null,
-      });
-
-      const visitDateParsed = parse(formData.visitDate, 'yyyy-MM-dd', new Date());
-      const dayStart = startOfDay(visitDateParsed);
-      const validFrom = setDate(dayStart, { hours: 8, minutes: 0 });
-      const validUntil = setDate(dayStart, { hours: 17, minutes: 0 });
-
       const gatePassRef = doc(collection(db, 'gatePasses'));
       const gatePassId = gatePassRef.id;
-
-      await setDoc(gatePassRef, {
-        visitorId,
-        visitorName: composedFullName,
-        purpose: formData.purpose,
-        photoPublicId,
-        idImagePublicId: idImagePublicId || null,
-        source: 'kiosk',
-        status: 'issued', // walk-ins go to 'issued', entry scanner makes them 'pending'
-        validFrom: Timestamp.fromDate(validFrom),
-        validUntil: Timestamp.fromDate(validUntil),
-        issuedAt: serverTimestamp(),
-        scannedAt: null,
-        timeIn: null,
-        timeOut: null,
-        entryDeviceId: null,
-        exitDeviceId: null,
-        decidedByUid: null,
-        rejectionReason: null,
-        gate: null,
-        createdByUid: uid,
+      const token = await user.getIdToken();
+      const response = await fetch('/api/create-pass', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          visitorId,
+          passId: gatePassId,
+          firstName: formData.firstName,
+          middleName: formData.middleName || '',
+          lastName: formData.lastName,
+          contactNumber: formData.contactNumber,
+          purpose: formData.purpose,
+          visitDate: formData.visitDate,
+          idImagePublicId: idImagePublicId || null,
+          photoPublicId,
+        }),
       });
+      const result = await response.json().catch(() => null) as {
+        error?: string;
+        passId?: string;
+        validFrom?: string | null;
+        validUntil?: string | null;
+      } | null;
+      if (!response.ok || result?.passId !== gatePassId) {
+        throw new Error(result?.error || 'Failed to create visitor pass');
+      }
 
       const qrUrl = await toDataURL(gatePassId, {
         width: 300,
@@ -230,9 +226,13 @@ export function KioskPage() {
       });
 
       setQrDataUrl(qrUrl);
+      setIssuedValidity(result?.validFrom && result.validUntil
+        ? formatValidityWindow(result.validFrom, result.validUntil)
+        : formatWorkingHours(workingHours));
       setStep('done');
       toast.success('Pass generated!');
     } catch (err) {
+      await cleanupUploadedImages(uploadedPublicIds);
       console.error(err);
       setSubmitError('Failed to generate pass.');
       setStep('review');
@@ -252,6 +252,7 @@ export function KioskPage() {
     if (idPreview) URL.revokeObjectURL(idPreview);
     setIdPreview(null);
     setQrDataUrl(null);
+    setIssuedValidity(null);
     setStep('form');
   }
 
@@ -267,7 +268,7 @@ export function KioskPage() {
     steps.findIndex(s => s.id === step);
 
   return (
-    <main className="flex min-h-dvh flex-col lg:flex-row items-center lg:items-start justify-center gap-8 px-4 py-8 lg:py-12 bg-[var(--color-canvas)] max-w-7xl mx-auto w-full">
+    <main id="main-content" className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col items-center justify-center gap-8 bg-[var(--color-canvas)] px-4 py-8 lg:flex-row lg:items-start lg:py-10">
       {/* Left Column (Fixed on Desktop) */}
       <div className="w-full max-w-lg lg:w-[320px] lg:shrink-0 lg:sticky lg:top-12 flex flex-col items-center lg:items-start print:hidden">
         
@@ -286,6 +287,7 @@ export function KioskPage() {
           <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">
             Walk-in Registration Kiosk
           </h1>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--color-text-secondary)]">Register one visitor at a time, then print the completed gate pass.</p>
         </div>
 
         {/* Step Indicator */}
@@ -306,36 +308,39 @@ export function KioskPage() {
       {/* Right Column (Dynamic Content) */}
       <div className="w-full max-w-lg lg:max-w-4xl flex-1 print:w-full print:max-w-none print:p-0">
         {/* Card container */}
-        <Card className="print:shadow-none print:p-0 print:border-0 print:bg-transparent">
+        <Card className="border-t-4 border-t-[var(--color-brand)] print:border-0 print:bg-transparent print:p-0 print:shadow-none">
           {step === 'form' && (
             <form onSubmit={handleSubmit(onFormNext)} className="space-y-5" noValidate>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField label="First Name" error={errors.firstName?.message}>
-                  <Input {...register('firstName')} placeholder="Juan" error={!!errors.firstName} />
+                <FormField label="First Name" id="kiosk-first-name" error={errors.firstName?.message}>
+                  <Input id="kiosk-first-name" {...register('firstName')} placeholder="Juan" error={!!errors.firstName} />
                 </FormField>
-                <FormField label="Middle Name" hint="Optional" error={errors.middleName?.message}>
-                  <Input {...register('middleName')} placeholder="Santos" error={!!errors.middleName} />
+                <FormField label="Middle Name" id="kiosk-middle-name" hint="Optional" error={errors.middleName?.message}>
+                  <Input id="kiosk-middle-name" {...register('middleName')} placeholder="Santos" error={!!errors.middleName} />
                 </FormField>
-                <FormField label="Last Name" error={errors.lastName?.message}>
-                  <Input {...register('lastName')} placeholder="Dela Cruz" error={!!errors.lastName} />
+                <FormField label="Last Name" id="kiosk-last-name" error={errors.lastName?.message}>
+                  <Input id="kiosk-last-name" {...register('lastName')} placeholder="Dela Cruz" error={!!errors.lastName} />
                 </FormField>
               </div>
 
-              <FormField label="Contact Number" error={errors.contactNumber?.message}>
-                <Input type="tel" {...register('contactNumber')} placeholder="09171234567" error={!!errors.contactNumber} />
+              <FormField label="Contact Number" id="kiosk-contact" error={errors.contactNumber?.message}>
+                <Input id="kiosk-contact" type="tel" {...register('contactNumber')} placeholder="09171234567" error={!!errors.contactNumber} />
               </FormField>
 
-              <FormField label="Purpose of Visit" error={errors.purpose?.message}>
-                <Textarea {...register('purpose')} rows={3} placeholder="e.g. Meeting with Prof. Santos, Room 201" error={!!errors.purpose} />
+              <VisitPurposeField
+                purposes={visitPurposes}
+                value={purpose}
+                error={errors.purpose?.message}
+                onChange={(value) => setValue('purpose', value, { shouldDirty: true, shouldValidate: true })}
+              />
+
+              <FormField label="Visit Date" id="kiosk-date" error={errors.visitDate?.message}>
+                <Input id="kiosk-date" type="date" {...register('visitDate')} min={today} error={!!errors.visitDate} />
               </FormField>
 
-              <FormField label="Visit Date" error={errors.visitDate?.message}>
-                <Input type="date" {...register('visitDate')} min={today} error={!!errors.visitDate} />
-              </FormField>
-
-              <div className="rounded-xl p-4 bg-[var(--color-brand-light)] border border-red-100">
+              <div className="rounded-xl border border-[var(--color-brand)]/20 bg-[var(--color-brand-light)] p-4">
                 <label className="flex items-start gap-3 cursor-pointer">
-                  <input type="checkbox" {...register('consent')} className="mt-1 h-4 w-4 rounded border-gray-300 text-[var(--color-earist-red)] focus:ring-[var(--color-earist-red)]" />
+                  <input type="checkbox" {...register('consent')} className="mt-1 h-5 w-5 shrink-0 rounded border-[var(--color-border-strong)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]" />
                   <span className="text-sm text-[var(--color-text-primary)]">
                     I consent to the collection and processing of my personal information in accordance with the Data Privacy Act of 2012 (RA 10173).
                   </span>
@@ -382,7 +387,7 @@ export function KioskPage() {
                 <div className="space-y-4">
                   <div className="relative mx-auto max-w-xs overflow-hidden rounded-xl border border-[var(--color-border)] shadow-sm">
                     <img src={idPreview} alt="ID preview" className="w-full object-cover" />
-                    <button type="button" onClick={() => setIdPreview(null)} className="absolute right-2 top-2 rounded-full bg-black/60 hover:bg-black/80 transition-colors p-1 text-white">
+                    <button type="button" onClick={() => setIdPreview(null)} className="absolute right-2 top-2 flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80" aria-label="Remove ID image">
                       <X className="h-4 w-4" />
                     </button>
                   </div>
@@ -398,8 +403,13 @@ export function KioskPage() {
               ) : (
                 <div className="space-y-4">
                   <div
-                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-gray-50 hover:bg-gray-100 transition-colors"
+                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-[var(--color-canvas)] transition-colors hover:border-[var(--color-brand)] hover:bg-[var(--color-brand-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
                     onClick={() => fileInputRef.current?.click()}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') fileInputRef.current?.click();
+                    }}
                   >
                     <Upload className="mb-3 h-10 w-10 text-[var(--color-text-muted)]" />
                     <span className="text-sm font-bold text-[var(--color-text-primary)]">Tap to upload ID</span>
@@ -413,9 +423,9 @@ export function KioskPage() {
           {step === 'review' && (
             <div className="space-y-6">
               <h2 className="text-center text-lg font-bold text-[var(--color-text-primary)]">Review Pass</h2>
-              {submitError && <div className="rounded-md bg-red-50 p-3 text-sm text-red-600 border border-red-200">{submitError}</div>}
+              {submitError && <div className="rounded-md border border-[var(--color-danger)] bg-[var(--color-danger-light)] p-3 text-sm text-[var(--color-danger-dark)]" role="alert">{submitError}</div>}
               
-              <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)] text-sm">
+              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas)] p-4 text-sm">
                 <p className="mb-2"><strong className="text-[var(--color-text-secondary)]">Name:</strong> {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}</p>
                 <p><strong className="text-[var(--color-text-secondary)]">Purpose:</strong> {getValues('purpose')}</p>
               </div>
@@ -439,28 +449,28 @@ export function KioskPage() {
 
           {step === 'generating' && (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-earist-red)]" />
+              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-brand)]" role="status" aria-label="Generating gate pass" />
               <p className="text-xl font-bold text-[var(--color-text-primary)]">Generating gate pass…</p>
             </div>
           )}
 
           {step === 'done' && qrDataUrl && (
             <div className="space-y-6 text-center print:text-left print:m-0 print:space-y-2">
-              <div className="print:hidden mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-[var(--color-success)] mb-2">
+              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-success-light)] text-[var(--color-success)] print:hidden">
                 <CheckCircle2 className="h-8 w-8" />
               </div>
               
               <h2 className="text-2xl font-bold text-[var(--color-text-primary)] print:text-xl">Gate Pass (Walk-in)</h2>
 
-              <div className="mx-auto inline-block rounded-2xl bg-white p-4 border-2 border-gray-100 shadow-sm print:mx-0 print:p-0 print:border-0 print:shadow-none">
+              <div className="mx-auto inline-block rounded-2xl border border-[var(--color-border)] bg-white p-4 shadow-md print:mx-0 print:border-0 print:p-0 print:shadow-none">
                 <img src={qrDataUrl} alt="QR Code" className="h-64 w-64 print:h-48 print:w-48" />
               </div>
 
-              <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)] text-left text-sm print:bg-transparent print:p-0 print:border-0">
+              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas)] p-4 text-left text-sm print:border-0 print:bg-transparent print:p-0">
                 <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Name:</strong> {[getValues('firstName'), getValues('middleName'), getValues('lastName')].filter(Boolean).join(' ')}</p>
                 <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Date:</strong> {getValues('visitDate')}</p>
                 <p className="mb-1"><strong className="text-[var(--color-text-secondary)]">Purpose:</strong> {getValues('purpose')}</p>
-                <p><strong className="text-[var(--color-text-secondary)]">Valid:</strong> 08:00 AM – 05:00 PM</p>
+                <p><strong className="text-[var(--color-text-secondary)]">Valid:</strong> {issuedValidity || formatWorkingHours(workingHours)}</p>
               </div>
 
               <div className="flex gap-3 print:hidden">

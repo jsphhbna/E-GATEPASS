@@ -36,17 +36,11 @@ export function Modal({
     <Dialog.Root open={isOpen} onOpenChange={(open) => !preventClose && !open && onClose()}>
       <Dialog.Portal>
         {/* Backdrop */}
-        <Dialog.Overlay 
-          className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-[6px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-150" 
-          style={{ 
-            // Optional tint
-            backgroundColor: 'rgba(26, 0, 0, 0.6)' 
-          }}
-        />
+        <Dialog.Overlay className="fixed inset-0 z-[100] bg-[var(--color-overlay-strong)] backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-150" />
         {/* Content wrapper for centering */}
-        <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto p-4 sm:p-6" style={{ height: '100dvh' }}>
+        <div className="fixed inset-0 z-[100] grid h-dvh place-items-center overflow-y-auto p-4 sm:p-6">
           <Dialog.Content 
-            className={`relative flex w-full max-h-[90dvh] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:duration-120 data-[state=open]:duration-180 ${sizeClasses[size]} ${className}`}
+            className={`relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-white shadow-lg focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 ${sizeClasses[size]} ${className}`}
             onPointerDownOutside={(e) => {
               if (preventClose) e.preventDefault();
             }}
@@ -54,21 +48,23 @@ export function Modal({
               if (preventClose) e.preventDefault();
             }}
           >
+            {hideTitleRow && (
+              <Dialog.Title className="sr-only">{title || 'Dialog'}</Dialog.Title>
+            )}
+            <Dialog.Description className="sr-only">
+              {description || 'Dialog content'}
+            </Dialog.Description>
+
             {/* Title Row */}
             {!hideTitleRow && (
               <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] p-4 sm:p-6">
                 <Dialog.Title className="text-xl font-bold text-[var(--color-text-primary)]">
                   {title}
                 </Dialog.Title>
-                {description && (
-                  <Dialog.Description className="sr-only">
-                    {description}
-                  </Dialog.Description>
-                )}
                 {!preventClose && (
                   <Dialog.Close asChild>
                     <button
-                      className="rounded-full p-2 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-canvas)] hover:text-[var(--color-earist-maroon)] focus:outline-none focus:ring-2 focus:ring-[var(--color-earist-maroon)]"
+                      className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-brand-light)] hover:text-[var(--color-brand)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)]"
                       aria-label="Close modal"
                     >
                       <X className="h-5 w-5" />
@@ -83,10 +79,6 @@ export function Modal({
               {children}
             </div>
             
-            {/* Hidden description for accessibility if no visible description exists */}
-            <Dialog.Description className="sr-only">
-              Dialog content
-            </Dialog.Description>
           </Dialog.Content>
         </div>
       </Dialog.Portal>
@@ -118,9 +110,9 @@ export function ConfirmModal({
   loading = false,
 }: ConfirmModalProps) {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="sm" hideTitleRow preventClose={loading}>
+    <Modal isOpen={isOpen} onClose={onClose} title={title} description={description} size="sm" hideTitleRow preventClose={loading}>
       <div className="flex flex-col items-center text-center pt-2">
-        <div className={`mb-4 flex h-12 w-12 items-center justify-center rounded-full ${isDestructive ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}>
+        <div className={`mb-4 flex h-12 w-12 items-center justify-center rounded-full ${isDestructive ? 'bg-[var(--color-danger-light)] text-[var(--color-danger)]' : 'bg-[var(--color-warning-light)] text-[var(--color-warning-dark)]'}`}>
           <AlertTriangle className="h-6 w-6" />
         </div>
         <h2 className="mb-2 text-xl font-bold text-[var(--color-text-primary)]">{title}</h2>

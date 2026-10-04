@@ -15,11 +15,13 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
   useEffect(() => {
     let active = true;
     let url: string | null = null;
+    const controller = new AbortController();
 
     async function fetchImage() {
       try {
         setLoading(true);
         setError(false);
+        setObjectUrl(null);
         
         const user = auth.currentUser;
         if (!user) {
@@ -30,7 +32,8 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
         const response = await fetch(`/api/image?publicId=${encodeURIComponent(publicId)}`, {
           headers: {
             Authorization: `Bearer ${token}`
-          }
+          },
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -38,6 +41,7 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
         }
 
         const blob = await response.blob();
+        if (!blob.type.toLocaleLowerCase().startsWith('image/')) throw new Error('Image response had an invalid content type');
         
         if (active) {
           url = URL.createObjectURL(blob);
@@ -45,8 +49,8 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
           setLoading(false);
         }
       } catch (err) {
-        console.error('Failed to load authenticated image:', err);
-        if (active) {
+        if (!controller.signal.aborted) console.error('Failed to load authenticated image:', err);
+        if (active && !controller.signal.aborted) {
           setError(true);
           setLoading(false);
         }
@@ -62,6 +66,7 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
 
     return () => {
       active = false;
+      controller.abort();
       if (url) {
         URL.revokeObjectURL(url);
       }
@@ -71,8 +76,7 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
   if (loading) {
     return (
       <div 
-        className={`flex items-center justify-center animate-pulse ${className}`}
-        style={{ backgroundColor: 'var(--color-overlay)' }}
+        className={`flex animate-pulse items-center justify-center bg-[var(--color-overlay)] ${className}`}
         role="img"
         aria-label="Loading image..."
       />
@@ -82,13 +86,9 @@ export function AuthenticatedImage({ publicId, fallbackText = 'Image unavailable
   if (error || !objectUrl) {
     return (
       <div 
-        className={`flex flex-col items-center justify-center text-center p-4 ${className}`}
-        style={{ 
-          backgroundColor: 'var(--color-overlay)',
-          color: 'var(--color-text-muted)',
-          border: '1px dashed var(--color-border-strong)',
-          borderRadius: 'var(--radius-sm)'
-        }}
+        className={`flex flex-col items-center justify-center rounded-md border border-dashed border-[var(--color-border-strong)] bg-[var(--color-overlay)] p-4 text-center text-[var(--color-text-muted)] ${className}`}
+        role="img"
+        aria-label={fallbackText}
       >
         <ImageOff className="h-6 w-6 mb-2" />
         <span className="text-xs font-medium">{fallbackText}</span>

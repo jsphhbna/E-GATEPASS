@@ -1,7 +1,12 @@
+import { lazy } from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { ForcePasswordChange } from '@/components/ForcePasswordChange';
 import type { AuthRole } from '@/types';
+import { LoadingState } from '@/components/ui';
+
+const ForcePasswordChange = lazy(() => import('@/components/ForcePasswordChange').then((module) => ({
+  default: module.ForcePasswordChange,
+})));
 
 interface ProtectedRouteProps {
   /** Roles allowed to access this route */
@@ -25,12 +30,8 @@ export function ProtectedRoute({
 
   if (status === 'loading') {
     return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <div
-          className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent"
-          role="status"
-          aria-label="Loading"
-        />
+      <div className="min-h-dvh bg-[var(--color-canvas)]">
+        <LoadingState label="Checking your access..." className="min-h-dvh" />
       </div>
     );
   }

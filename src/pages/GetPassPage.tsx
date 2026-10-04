@@ -3,10 +3,10 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { signInAnonymously } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp, Timestamp, collection } from 'firebase/firestore';
+import { collection, doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { useWebcam } from '@/hooks/useWebcam';
-import { compressImageToWebP, uploadToCloudinary } from '@/lib/cloudinary';
+import { cleanupUploadedImages, compressImageToWebP, uploadToCloudinary } from '@/lib/cloudinary';
 import { toDataURL } from 'qrcode';
 import {
   Camera,
@@ -18,12 +18,17 @@ import {
   AlertCircle,
   X,
   RotateCcw,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { format, parse, startOfDay, set as setDate } from 'date-fns';
+import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
-import { Button, Card, Input, Textarea, FormField, Stepper, PageShell } from '@/components/ui';
+import { Button, Card, Input, FormField, Stepper, PageShell } from '@/components/ui';
 import { BrandMark } from '@/components/BrandMark';
+import { VisitPurposeField } from '@/components/VisitPurposeField';
+import { DEFAULT_VISIT_PURPOSES, normalizeVisitPurposes } from '@/lib/settingsDefaults';
+import type { VisitPurposeOption } from '@/types';
+import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, normalizeWorkingHours } from '@/lib/workingHours';
 
 // ============================================================
 // FORM SCHEMA (Zod)
@@ -82,12 +87,18 @@ export function GetPassPage() {
   const [passId, setPassId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isPeakMode, setIsPeakMode] = useState(false);
+  const [visitPurposes, setVisitPurposes] = useState<VisitPurposeOption[]>(DEFAULT_VISIT_PURPOSES);
+  const [workingHours, setWorkingHours] = useState(DEFAULT_WORKING_HOURS);
+  const [issuedValidity, setIssuedValidity] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'app')).then((docSnap) => {
-      if (docSnap.exists() && docSnap.data().peakMode) {
-        setIsPeakMode(true);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setIsPeakMode(data.peakMode === true);
+        setVisitPurposes(normalizeVisitPurposes(data.visitPurposes));
+        setWorkingHours(normalizeWorkingHours(data.workingHours));
       }
     });
   }, []);
@@ -98,11 +109,15 @@ export function GetPassPage() {
     register,
     handleSubmit,
     getValues,
+    setValue,
+    watch,
     formState: { errors, isValid },
   } = useForm<GetPassFormData>({
     resolver: zodResolver(getPassSchema),
     mode: 'onChange',
+    defaultValues: { purpose: '' },
   });
+  const purpose = watch('purpose');
 
   // Get today as min date
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -173,15 +188,20 @@ export function GetPassPage() {
     setStep('generating');
     setSubmitError(null);
 
+    const uploadedPublicIds: string[] = [];
     try {
       // 1. Anonymous sign-in
       const userCredential = await signInAnonymously(auth);
-      const uid = userCredential.user.uid;
 
       // 2. Upload images to Cloudinary
-      const uploads = [uploadToCloudinary(photoBlob, 'e-gatepass/photos')];
+      const trackedUpload = async (blob: Blob, folder: 'e-gatepass/photos' | 'e-gatepass/ids') => {
+        const publicId = await uploadToCloudinary(blob, folder);
+        uploadedPublicIds.push(publicId);
+        return publicId;
+      };
+      const uploads = [trackedUpload(photoBlob, 'e-gatepass/photos')];
       if (idBlob) {
-        uploads.push(uploadToCloudinary(idBlob, 'e-gatepass/ids'));
+        uploads.push(trackedUpload(idBlob, 'e-gatepass/ids'));
       }
       const [photoPublicId, idImagePublicId] = await Promise.all(uploads);
 
@@ -189,60 +209,34 @@ export function GetPassPage() {
       const formData = getValues();
       const visitorRef = doc(collection(db, 'visitors'));
       const visitorId = visitorRef.id;
-
-      const composedFullName = [formData.firstName, formData.middleName, formData.lastName]
-        .filter(Boolean)
-        .join(' ')
-        .replace(/\s+/g, ' ');
-
-      await setDoc(visitorRef, {
-        firstName: formData.firstName,
-        middleName: formData.middleName || '',
-        lastName: formData.lastName,
-        fullName: composedFullName,
-        contactNumber: formData.contactNumber,
-        purpose: formData.purpose,
-        visitDate: formData.visitDate,
-        idImagePublicId: idImagePublicId || null,
-        photoPublicId,
-        consentAcceptedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        createdByUid: uid,
-        imagesPurgedAt: null,
-      });
-
-      // 4. Calculate pass validity based on working hours
-      // TODO: Read from settings/app in production; hardcoding 08:00–17:00 for now
-      const visitDateParsed = parse(formData.visitDate, 'yyyy-MM-dd', new Date());
-      const dayStart = startOfDay(visitDateParsed);
-      const validFrom = setDate(dayStart, { hours: 8, minutes: 0 });
-      const validUntil = setDate(dayStart, { hours: 17, minutes: 0 });
-
-      // 5. Create gate pass doc
       const gatePassRef = doc(collection(db, 'gatePasses'));
       const gatePassId = gatePassRef.id;
-
-      await setDoc(gatePassRef, {
-        visitorId,
-        visitorName: composedFullName,
-        purpose: formData.purpose,
-        photoPublicId,
-        idImagePublicId: idImagePublicId || null,
-        source: 'portal' as const,
-        status: 'issued' as const,
-        validFrom: Timestamp.fromDate(validFrom),
-        validUntil: Timestamp.fromDate(validUntil),
-        issuedAt: serverTimestamp(),
-        scannedAt: null,
-        timeIn: null,
-        timeOut: null,
-        entryDeviceId: null,
-        exitDeviceId: null,
-        decidedByUid: null,
-        rejectionReason: null,
-        gate: null,
-        createdByUid: uid,
+      const token = await userCredential.user.getIdToken();
+      const response = await fetch('/api/create-pass', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          visitorId,
+          passId: gatePassId,
+          firstName: formData.firstName,
+          middleName: formData.middleName || '',
+          lastName: formData.lastName,
+          contactNumber: formData.contactNumber,
+          purpose: formData.purpose,
+          visitDate: formData.visitDate,
+          idImagePublicId: idImagePublicId || null,
+          photoPublicId,
+        }),
       });
+      const result = await response.json().catch(() => null) as {
+        error?: string;
+        passId?: string;
+        validFrom?: string | null;
+        validUntil?: string | null;
+      } | null;
+      if (!response.ok || result?.passId !== gatePassId) {
+        throw new Error(result?.error || 'Failed to create visitor pass');
+      }
 
       // 6. Generate QR code
       // QR payload is the gate pass document ID (scanner looks up the doc)
@@ -257,9 +251,13 @@ export function GetPassPage() {
 
       setQrDataUrl(qrUrl);
       setPassId(gatePassId);
+      setIssuedValidity(result?.validFrom && result.validUntil
+        ? formatValidityWindow(result.validFrom, result.validUntil)
+        : formatWorkingHours(workingHours));
       setStep('done');
       toast.success('Gate pass generated successfully!');
     } catch (err) {
+      await cleanupUploadedImages(uploadedPublicIds);
       console.error('Pass generation error:', err);
       setSubmitError(
         err instanceof Error ? err.message : 'An unexpected error occurred.'
@@ -315,10 +313,11 @@ export function GetPassPage() {
         </Link>
       }
     >
-      <div className="mx-auto w-full max-w-lg">
+      <div className="mx-auto w-full max-w-xl">
         {/* Header */}
         <div className="mb-8 text-center">
           <BrandMark size="lg" className="mx-auto mb-4" />
+          <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[var(--color-brand)]">EARIST visitor access</p>
           <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">
             Get Gate Pass
           </h1>
@@ -333,30 +332,33 @@ export function GetPassPage() {
         )}
 
         {/* Card container */}
-        <Card>
+        <Card className="border-t-4 border-t-[var(--color-brand)]">
           {/* ============================== STEP 1: FORM ============================== */}
           {step === 'form' && (
             <form onSubmit={handleSubmit(onFormNext)} className="space-y-5" noValidate>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField label="First Name" error={errors.firstName?.message}>
+                <FormField label="First Name" id="visitor-first-name" error={errors.firstName?.message}>
                   <Input
+                    id="visitor-first-name"
                     {...register('firstName')}
                     placeholder="Juan"
                     error={!!errors.firstName}
                   />
                 </FormField>
 
-                <FormField label="Middle Name" hint="Optional" error={errors.middleName?.message}>
+                <FormField label="Middle Name" id="visitor-middle-name" hint="Optional" error={errors.middleName?.message}>
                   <Input
+                    id="visitor-middle-name"
                     {...register('middleName')}
                     placeholder="Santos"
                     error={!!errors.middleName}
                   />
                 </FormField>
 
-                <FormField label="Last Name" error={errors.lastName?.message}>
+                <FormField label="Last Name" id="visitor-last-name" error={errors.lastName?.message}>
                   <Input
+                    id="visitor-last-name"
                     {...register('lastName')}
                     placeholder="Dela Cruz"
                     error={!!errors.lastName}
@@ -364,8 +366,9 @@ export function GetPassPage() {
                 </FormField>
               </div>
 
-              <FormField label="Contact Number" error={errors.contactNumber?.message}>
+              <FormField label="Contact Number" id="visitor-contact" error={errors.contactNumber?.message}>
                 <Input
+                  id="visitor-contact"
                   type="tel"
                   {...register('contactNumber')}
                   placeholder="09171234567"
@@ -373,17 +376,16 @@ export function GetPassPage() {
                 />
               </FormField>
 
-              <FormField label="Purpose of Visit" error={errors.purpose?.message}>
-                <Textarea
-                  {...register('purpose')}
-                  rows={3}
-                  placeholder="e.g. Meeting with Prof. Santos, Room 201"
-                  error={!!errors.purpose}
-                />
-              </FormField>
+              <VisitPurposeField
+                purposes={visitPurposes}
+                value={purpose}
+                error={errors.purpose?.message}
+                onChange={(value) => setValue('purpose', value, { shouldDirty: true, shouldValidate: true })}
+              />
 
-              <FormField label="Visit Date" error={errors.visitDate?.message}>
+              <FormField label="Visit Date" id="visitor-date" error={errors.visitDate?.message}>
                 <Input
+                  id="visitor-date"
                   type="date"
                   {...register('visitDate')}
                   min={today}
@@ -392,12 +394,12 @@ export function GetPassPage() {
               </FormField>
 
               {/* Data Privacy Act Consent */}
-              <div className="rounded-xl p-4 bg-[var(--color-brand-light)] border border-red-100">
+              <div className="rounded-xl border border-[var(--color-brand)]/20 bg-[var(--color-brand-light)] p-4">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <input
                     type="checkbox"
                     {...register('consent')}
-                    className="mt-1 h-4 w-4 rounded border-gray-300 text-[var(--color-earist-red)] focus:ring-[var(--color-earist-red)]"
+                    className="mt-1 h-5 w-5 shrink-0 rounded border-[var(--color-border-strong)] text-[var(--color-brand)] focus:ring-[var(--color-brand)]"
                   />
                   <span className="text-sm text-[var(--color-text-primary)]">
                     I consent to the collection and processing of my personal
@@ -432,7 +434,7 @@ export function GetPassPage() {
               </div>
 
               {webcam.error && (
-                <div className="rounded-md p-3 text-sm bg-red-50 text-red-600 border border-red-200" role="alert">
+                <div className="rounded-md border border-[var(--color-danger)] bg-[var(--color-danger-light)] p-3 text-sm text-[var(--color-danger-dark)]" role="alert">
                   {webcam.error}
                 </div>
               )}
@@ -513,7 +515,7 @@ export function GetPassPage() {
               ) : (
                 <div className="space-y-4">
                   <div
-                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-gray-50 hover:bg-gray-100 transition-colors"
+                    className="flex aspect-[3/2] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[var(--color-border-strong)] bg-[var(--color-canvas)] transition-colors hover:border-[var(--color-brand)] hover:bg-[var(--color-brand-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
                     onClick={() => fileInputRef.current?.click()}
                     role="button"
                     tabIndex={0}
@@ -556,14 +558,14 @@ export function GetPassPage() {
               </h2>
 
               {submitError && (
-                <div className="rounded-md p-3 text-sm bg-red-50 text-red-600 border border-red-200" role="alert">
+                <div className="rounded-md border border-[var(--color-danger)] bg-[var(--color-danger-light)] p-3 text-sm text-[var(--color-danger-dark)]" role="alert">
                   {submitError}
                 </div>
               )}
 
               <div className="space-y-4">
                 {/* Info summary */}
-                <div className="rounded-xl p-4 bg-gray-50 border border-[var(--color-border)]">
+                <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas)] p-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Name</span>
@@ -634,7 +636,7 @@ export function GetPassPage() {
           {/* ============================== GENERATING ============================== */}
           {step === 'generating' && (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-[var(--color-earist-red)]" role="status" />
+              <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-brand)]" role="status" aria-label="Generating gate pass" />
               <h2 className="text-xl font-bold text-[var(--color-text-primary)]">
                 Generating your gate pass…
               </h2>
@@ -647,7 +649,7 @@ export function GetPassPage() {
           {/* ============================== STEP 5: DONE ============================== */}
           {step === 'done' && qrDataUrl && (
             <div className="space-y-6 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-[var(--color-success)] mb-2">
+              <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-success-light)] text-[var(--color-success)]">
                 <CheckCircle2 className="h-8 w-8" />
               </div>
 
@@ -660,11 +662,27 @@ export function GetPassPage() {
                 </p>
               </div>
 
-              <div className="mx-auto inline-block rounded-2xl bg-white p-4 border-2 border-gray-100 shadow-sm">
-                <img src={qrDataUrl} alt="Gate Pass QR Code" className="h-64 w-64" />
+              <div className="mx-auto w-full max-w-sm overflow-hidden rounded-2xl border border-[var(--color-border)] bg-white text-left shadow-md">
+                <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <BrandMark size="sm" />
+                    <div>
+                      <p className="text-sm font-extrabold text-[var(--color-brand)]">E-GatePass</p>
+                      <p className="text-xs text-[var(--color-text-muted)]">Digital visitor pass</p>
+                    </div>
+                  </div>
+                  <span className="rounded-full border border-[var(--color-success)] bg-[var(--color-success-light)] px-2.5 py-1 text-xs font-bold text-[var(--color-success-dark)]">QR ready</span>
+                </div>
+                <div className="flex justify-center p-4">
+                  <img src={qrDataUrl} alt="Gate Pass QR Code" className="h-64 w-64 max-w-full" />
+                </div>
+                <div className="flex gap-2 border-t border-[var(--color-border)] bg-[var(--color-brand-light)] px-4 py-3 text-xs leading-relaxed text-[var(--color-text-secondary)]">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-brand)]" aria-hidden="true" />
+                  <span>Campus security verifies this pass after it is scanned at the entry gate.</span>
+                </div>
               </div>
 
-              <div className="rounded-xl p-4 text-left text-sm bg-gray-50 border border-[var(--color-border)]">
+              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas)] p-4 text-left text-sm">
                 <p className="mb-1">
                   <span className="font-semibold text-[var(--color-text-secondary)]">Name:</span>{' '}
                   <span className="font-bold text-[var(--color-text-primary)]">
@@ -677,7 +695,7 @@ export function GetPassPage() {
                 </p>
                 <p>
                   <span className="font-semibold text-[var(--color-text-secondary)]">Valid:</span>{' '}
-                  <span className="font-bold text-[var(--color-text-primary)]">08:00 AM – 05:00 PM</span>
+                  <span className="font-bold text-[var(--color-text-primary)]">{issuedValidity || formatWorkingHours(workingHours)}</span>
                 </p>
               </div>
 
@@ -690,10 +708,7 @@ export function GetPassPage() {
                 </Button>
               </div>
 
-              <p
-                className="text-xs"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
+              <p className="text-xs text-[var(--color-text-muted)]">
                 You can also take a screenshot of this page.
               </p>
             </div>

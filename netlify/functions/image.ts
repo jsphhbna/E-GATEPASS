@@ -1,6 +1,8 @@
-import { Handler } from '@netlify/functions';
+import type { Handler } from '@netlify/functions';
+import { getFirestore } from 'firebase-admin/firestore';
 import { v2 as cloudinary } from 'cloudinary';
-import { requireAdmin, requireGuardOrAdmin, handleAuthError } from './utils/auth';
+import { handleAuthError, requireGuardOrAdmin } from './utils/auth';
+import { authorizeReferencedImage, ImageAccessError } from './utils/image-security';
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -9,64 +11,52 @@ cloudinary.config({
   secure: true,
 });
 
-export const handler: Handler = async (event) => {
-  const { httpMethod } = event;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-  if (httpMethod !== 'GET' && httpMethod !== 'DELETE') {
-    return { statusCode: 405, body: 'Method not allowed' };
-  }
+function jsonResponse(statusCode: number, body: object) {
+  return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+export const handler: Handler = async (event) => {
+  if (event.httpMethod !== 'GET') return jsonResponse(405, { error: 'Method not allowed' });
 
   try {
-    // 1. Get Public ID first to fail fast if missing
+    const actor = await requireGuardOrAdmin(event.headers.authorization || event.headers.Authorization);
     const publicId = event.queryStringParameters?.publicId;
-    if (!publicId) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'Missing publicId' }) };
+    await authorizeReferencedImage(getFirestore(), actor, publicId);
+
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_SECRET) {
+      console.error('Image proxy is missing required Cloudinary configuration');
+      return jsonResponse(500, { error: 'Image access is not configured' });
     }
 
-    // ============================================================================
-    // DELETE: Admin only
-    // ============================================================================
-    if (httpMethod === 'DELETE') {
-      await requireAdmin(event.headers.authorization || event.headers.Authorization);
-
-      await cloudinary.uploader.destroy(publicId);
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' } as Record<string, string>,
-        body: JSON.stringify({ success: true }),
-      };
-    }
-
-    // ============================================================================
-    // GET: Staff only (Admin/Guard)
-    // ============================================================================
-    await requireGuardOrAdmin(event.headers.authorization || event.headers.Authorization);
-
-    const imageUrl = cloudinary.url(publicId, {
-      secure: true,
-      sign_url: true,
-    });
-
+    const imageUrl = cloudinary.url(publicId as string, { secure: true, sign_url: true });
     const imageResponse = await fetch(imageUrl);
-    
-    if (!imageResponse.ok) {
-      return { statusCode: 404, body: JSON.stringify({ error: 'Image not found' }) };
+    if (!imageResponse.ok) return jsonResponse(404, { error: 'Image not found' });
+
+    const contentType = imageResponse.headers.get('Content-Type') || '';
+    const contentLength = Number(imageResponse.headers.get('Content-Length') || 0);
+    if (!contentType.toLocaleLowerCase().startsWith('image/')) {
+      console.error('Image proxy rejected a non-image upstream response', { actorUid: actor.uid });
+      return jsonResponse(404, { error: 'Image not found' });
     }
+    if (contentLength > MAX_IMAGE_BYTES) return jsonResponse(413, { error: 'Image is too large' });
 
     const imageBuffer = await imageResponse.arrayBuffer();
-
+    if (imageBuffer.byteLength > MAX_IMAGE_BYTES) return jsonResponse(413, { error: 'Image is too large' });
     return {
       statusCode: 200,
       headers: {
-        'Content-Type': imageResponse.headers.get('Content-Type') || 'image/jpeg',
-        'Cache-Control': 'private, max-age=3600',
-      } as Record<string, string>,
+        'Content-Type': contentType,
+        'Cache-Control': 'private, max-age=300',
+        'X-Content-Type-Options': 'nosniff',
+      },
       body: Buffer.from(imageBuffer).toString('base64'),
       isBase64Encoded: true,
     };
-
   } catch (error) {
-    console.error('Image Proxy Error:', error);
+    if (error instanceof ImageAccessError) return jsonResponse(error.statusCode, { error: error.message });
+    console.error('Image proxy request failed', { error: error instanceof Error ? error.message : 'Unknown error' });
     return handleAuthError(error);
   }
 };
