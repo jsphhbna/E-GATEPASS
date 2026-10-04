@@ -1,86 +1,61 @@
-# EARIST E-GatePass
+# E-GatePass
 
-A comprehensive web-based visitor management system for EARIST, utilizing Firebase (Firestore, Auth) and Cloudinary for real-time QR-based gate passes, kiosk walk-ins, and strict data privacy compliance.
+E-GatePass is a school visitor-management system for QR gate passes, arrival screening, Guard decisions, and exit records. It serves public visitors, Guards, Admins, Super Admins, Kiosk devices, and Entry/Exit Scanner devices.
 
-## Features
+## Visitor lifecycle
 
-- **Get Pass Portal**: Public-facing portal for visitors to request a gate pass (Webcam + ID upload).
-- **Kiosk Walk-In**: On-site tablet walk-in registration with thermal printing support.
-- **Scanner Devices**: Dedicated accounts for Entry and Exit tablets to scan QR codes and update visitor status in real-time.
-- **Guard Dashboard**: Real-time queue of incoming visitors. Guards can approve/reject with premade reasons and sound alerts.
-- **Admin Dashboard**: Comprehensive dashboard for viewing metrics, exporting CSVs, managing users, revoking devices, and purging old data.
-- **Privacy First**: `imagesPurgedAt` ensures visitor photos are permanently deleted from Cloudinary and logged in Firestore after the retention period.
-- **Offline Resilience**: Offline banners and Firestore persistence for spotty connections.
+Get Pass or Kiosk creates a visitor and pass. Entry scanning moves a valid QR pass to pending; a Guard approves or rejects it; approved visitors become inside; Exit scanning records exited. Expired, malformed, wrongly routed, or already-used passes are rejected by the protected scanner workflow.
 
-## Local Development
+## Stack and runtime
 
-### Requirements
-- Node.js 22 or newer (required by the installed Firebase Admin SDK)
-- Java 11 or newer (required for the Firebase emulator test suite)
-- Firebase CLI (`npm install -g firebase-tools`)
-- Netlify CLI (`npm install -g netlify-cli`)
+React, TypeScript, Vite, Firebase Authentication, Firestore, Netlify Functions, Cloudinary, and browser QR scanning. Production uses Node 24, `firebase-admin@14.5.0`, and `NODE_OPTIONS=--experimental-require-module`; this known-working Firebase Admin / `jwks-rsa` / `jose` combination must not be casually changed.
 
-### Setup
+## Repository map
 
-1. Clone the repository and install dependencies:
-   ```bash
-   npm install
-   ```
+| Path | Purpose |
+| --- | --- |
+| `src/pages`, `src/components` | React interface |
+| `src/hooks/useAuth.tsx`, `src/components/ProtectedRoute.tsx` | session loading and route UX guards |
+| `src/lib/firebase.ts`, `src/lib/permissions.ts` | Firebase client and UI permissions |
+| `netlify/functions` | authoritative mutations, Firebase Admin, image handling |
+| `firestore.rules`, `firestore.indexes.json` | Firestore authorization and indexes |
+| `tests` | emulator-backed validation |
+| `docs` | technical handoff guides |
 
-2. Configure environment variables. Copy `.env.example` to `.env.local`:
-   ```bash
-   cp .env.example .env.local
-   ```
-   *Fill in your Firebase config, Cloudinary credentials, and Firebase Admin service account details.*
+## Local development
 
-3. Start the development server using Netlify Dev (required for `/api/image` edge functions):
-   ```bash
-   netlify dev
-   ```
+Requires Node 24, Java for emulator tests, and dependencies installed with `npm install`. Keep values only in `.env.local`.
 
-## Deploying to Netlify (HTTPS Device Testing)
-
-To test scanner devices (camera access) and kiosk webcams on mobile devices, you **must** serve the app over HTTPS. The easiest way to do this is to deploy to Netlify.
-
-### Step 1: Initialize Netlify
-Run the following command in your terminal and log in to Netlify:
 ```bash
-netlify login
-netlify init
-```
-*Follow the prompts to create & configure a new site.*
-
-### Step 2: Set Environment Variables on Netlify
-Your local `.env.local` is ignored by Git (for security). You must copy these variables to Netlify so your backend functions work in production.
-Run this command for each variable, or enter them via the Netlify Web UI:
-```bash
-netlify env:set VITE_FIREBASE_API_KEY "your_key"
-netlify env:set CLOUDINARY_API_KEY "your_key"
-netlify env:set FIREBASE_PRIVATE_KEY "your_escaped_private_key"
-# (Repeat for all variables in .env.local)
+npm run dev
+npm run netlify:dev
+npm run build
+npm test
+npx tsc --noEmit
+npm run typecheck:functions
 ```
 
-### Step 3: Deploy to Production
-Build and deploy the application to your live Netlify URL:
-```bash
-netlify deploy --prod
-```
+## Environment variable names
 
-### Step 4: Test on Mobile
-Netlify will output a live URL (e.g., `https://earist-egatepass-xyz.netlify.app`). 
-1. Open that URL on your phone or tablet.
-2. The browser will securely prompt for Camera permissions.
-3. You can now test the QR Scanner (`/scan/entry`) and the Webcam capture (`/get-pass` or `/kiosk`).
+Server-side: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`.
 
-## Architecture & Security Rules
+Client-safe: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`.
 
-- **Firebase Auth and Firestore roles**: Staff roles are `guard`, `admin`, and `superadmin`; device roles are `entry`, `exit`, and `kiosk`. Sensitive role and account-status changes are authorized and audited by backend functions.
-- **Firestore Rules**: Direct privilege escalation is denied. Guards retain visitor-operation access, Admins retain daily operational administration, and Super Admins control security-sensitive administration.
-- **Netlify Functions**: Secure proxy (`/api/image`) ensures Cloudinary images are only accessible to authenticated staff, preventing public exposure of visitor IDs.
+Optional: `CRON_SECRET`. Emulator-only: `VITE_USE_FIREBASE_EMULATORS`, `FIREBASE_AUTH_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST`, `GCLOUD_PROJECT`. Never expose server secrets in `VITE_*` or commit values.
 
-### First Super Admin
+## Deployment and roles
 
-There is no public bootstrap endpoint. Select exactly one existing active Admin and follow the one-time Firebase Console procedure in [First Super Admin Bootstrap](docs/SUPER_ADMIN_BOOTSTRAP.md). Do not automatically promote all existing Admins.
+GitHub `main` is the intended production branch and Netlify deploys it. Firestore rules and indexes are separate and must be deployed explicitly. Client role checks are UX only; Firestore Rules and Netlify Functions are authoritative. Admins operate day-to-day administration; Super Admins retain Admin abilities plus security-sensitive controls; Guards are limited to visit work; devices are limited by active status, type, and gate.
 
-## License
-Proprietary / Closed Source - EARIST.
+## Documentation
+
+- [Deployment](docs/DEPLOYMENT.md)
+- [Operations](docs/OPERATIONS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security](docs/SECURITY.md)
+- [Super Admin Bootstrap / Recovery](docs/SUPER_ADMIN_BOOTSTRAP.md)
+- [Clean Data Handoff](docs/CLEAN_DATA_HANDOFF.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Working Hours and Exports](docs/WORKING_HOURS_AND_EXPORTS.md)
+- [Image Security](docs/IMAGE_SECURITY.md)
+- [Audit and Reconciliation](docs/AUDIT_POLICY.md)

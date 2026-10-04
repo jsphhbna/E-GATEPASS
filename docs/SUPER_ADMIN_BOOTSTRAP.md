@@ -1,12 +1,12 @@
 # First Super Admin Bootstrap
 
-E-GatePass intentionally has no public or application-accessible bootstrap endpoint. Establish the first Super Admin once through the Firebase Console using an explicitly selected existing Admin account.
+E-GatePass intentionally has no public or application-accessible bootstrap endpoint. Establish the first Super Admin through authorized Firebase administration using one explicitly selected account. This is used for a fresh database, when no active Super Admin exists, or after an approved clean handoff.
 
 ## Preconditions
 
 - You must be an authorized Firebase project owner or administrator.
-- The selected person must already have a Firebase Authentication account and a matching `users/{uid}` Firestore document.
-- Confirm the account is active, email-verified, and currently has the `admin` role.
+- Create or select one legitimate Firebase Authentication account and ensure it has a matching `users/{uid}` Firestore document.
+- Confirm the account is active and email-verified where required. When promoting an existing account, confirm its current role is exactly `admin`.
 - Do not promote every existing Admin.
 
 ## One-time procedure
@@ -40,3 +40,5 @@ After this one-time bootstrap, use the protected user-management controls for ro
 ## Recovery
 
 If every Super Admin is accidentally lost through an out-of-band console change, repeat this manual procedure for one explicitly authorized active Admin and record a new bootstrap/recovery audit event. Never add a temporary public endpoint or client-side bypass.
+
+Do not promote arbitrary users. After recovery, verify sign-in, ordinary Admin capabilities, Super Admin controls, and that at least one active Super Admin remains.
