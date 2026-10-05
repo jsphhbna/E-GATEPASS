@@ -8,6 +8,8 @@ export const DEFAULT_WORKING_HOURS: WorkingHours = {
   timezone: 'Asia/Manila',
 };
 
+export const MAX_VISIT_ADVANCE_DAYS = 30;
+
 const timePattern = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export function normalizeWorkingHours(value: unknown): WorkingHours {

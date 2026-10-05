@@ -2,6 +2,7 @@ import type { Handler } from '@netlify/functions';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { adminAuth } from './firebase-admin';
+import { closedPassImageExpiryUpdate } from './utils/image-lifecycle';
 
 const scanSchema = z.object({
   passId: z.string().min(1).max(200).refine((value) => !value.includes('/')),
@@ -105,6 +106,8 @@ export const handler: Handler = async (event) => {
 
       const pass = passSnapshot.data();
       const visitorId = typeof pass?.visitorId === 'string' ? pass.visitorId : null;
+      const visitorRef = visitorId ? db.collection('visitors').doc(visitorId) : null;
+      const visitorSnapshot = visitorRef ? await transaction.get(visitorRef) : null;
       const now = Timestamp.now();
       let outcome: ScanResult;
 
@@ -117,6 +120,8 @@ export const handler: Handler = async (event) => {
           outcome = { ok: false, statusCode: 409, code: 'invalid_pass', message: 'Pass validity is invalid' };
         } else if (validUntilMillis < now.toMillis()) {
           transaction.update(passRef, { status: 'expired' });
+          const expiryUpdate = closedPassImageExpiryUpdate(visitorSnapshot?.data());
+          if (visitorRef && visitorSnapshot?.exists && expiryUpdate) transaction.update(visitorRef, expiryUpdate);
           outcome = { ok: false, statusCode: 409, code: 'expired', message: 'This pass has expired' };
         } else if (validFromMillis > now.toMillis()) {
           outcome = { ok: false, statusCode: 409, code: 'early', message: 'Pass is not yet valid' };
@@ -145,6 +150,8 @@ export const handler: Handler = async (event) => {
           timeOut: FieldValue.serverTimestamp(),
           exitDeviceId: decoded.uid,
         });
+        const expiryUpdate = closedPassImageExpiryUpdate(visitorSnapshot?.data());
+        if (visitorRef && visitorSnapshot?.exists && expiryUpdate) transaction.update(visitorRef, expiryUpdate);
         transaction.create(logRef, {
           passToken: request.passId,
           visitorId,

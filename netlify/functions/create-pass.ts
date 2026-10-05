@@ -1,10 +1,16 @@
 import type { Handler } from '@netlify/functions';
-import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { adminAuth } from './firebase-admin';
 import { recordReconciliationTask } from './utils/reconciliation';
 import { parseVisitWindow } from './utils/working-hours';
 import { uploadSessionIdFromPublicId } from './utils/image-security';
+import {
+  calculateImageExpiry,
+  isVisitDateWithinPolicy,
+  normalizeImageDeliveryType,
+} from './utils/image-lifecycle';
+import { clientAddressFromHeaders, enforceRateLimit, RateLimitError } from './utils/rate-limit';
 
 const namePattern = /^[\p{L}\s\-'.]+$/u;
 const documentId = z.string().min(1).max(128).refine((value) => !value.includes('/'));
@@ -78,6 +84,31 @@ export const handler: Handler = async (event) => {
     });
     let source: 'portal' | 'kiosk' = 'portal';
 
+    const [preflightDevice, preflightUser] = await Promise.all([actorDeviceRef.get(), actorUserRef.get()]);
+    if (isAnonymous) {
+      if (preflightDevice.exists || preflightUser.exists) {
+        throw new RequestError(403, 'This account cannot create a public visitor pass');
+      }
+      source = 'portal';
+    } else {
+      const device = preflightDevice.data();
+      if (
+        decoded.email_verified !== true ||
+        preflightUser.exists ||
+        !preflightDevice.exists ||
+        device?.status !== 'active' ||
+        device?.type !== 'kiosk'
+      ) throw new RequestError(403, 'An active Kiosk device is required');
+      source = 'kiosk';
+    }
+
+    await enforceRateLimit(db, {
+      operation: 'create_pass',
+      actorType: source === 'portal' ? 'visitor' : 'kiosk',
+      uid: decoded.uid,
+      clientAddress: clientAddressFromHeaders(event.headers),
+    });
+
     const result = await db.runTransaction(async (transaction) => {
       const [deviceSnapshot, userSnapshot, visitorSnapshot, passSnapshot, settingsSnapshot, ...uploadSnapshots] = await Promise.all([
         transaction.get(actorDeviceRef),
@@ -126,6 +157,7 @@ export const handler: Handler = async (event) => {
         throw new RequestError(409, 'Pass identifiers are already in use');
       }
 
+      const uploadDeliveryTypes = new Map<string, 'upload' | 'authenticated'>();
       uploadSnapshots.forEach((snapshot, index) => {
         const expected = uploadSessionRefs[index];
         const session = snapshot.data();
@@ -136,6 +168,7 @@ export const handler: Handler = async (event) => {
           session?.publicId !== expected.publicId ||
           session?.status !== 'pending'
         ) throw new RequestError(403, 'Uploaded image ownership could not be verified');
+        uploadDeliveryTypes.set(expected.publicId, normalizeImageDeliveryType(session.deliveryType));
       });
 
       if (settingsSnapshot.data()?.peakMode !== true && request.idImagePublicId === null) {
@@ -148,13 +181,22 @@ export const handler: Handler = async (event) => {
       } catch {
         throw new RequestError(400, 'Invalid visit date');
       }
+      if (!isVisitDateWithinPolicy(request.visitDate)) {
+        throw new RequestError(400, 'Visit date must be within the next 30 days');
+      }
 
       const fullName = [request.firstName, request.middleName, request.lastName]
         .filter(Boolean)
         .join(' ')
         .replace(/\s+/g, ' ');
-      const imageRetentionDays = typeof settingsSnapshot.data()?.imageRetentionDays === 'number'
-        ? settingsSnapshot.data()!.imageRetentionDays : 7;
+      const configuredImageRetentionDays = settingsSnapshot.data()?.imageRetentionDays;
+      const imageRetentionDays = typeof configuredImageRetentionDays === 'number' && configuredImageRetentionDays >= 1
+        ? configuredImageRetentionDays : 7;
+      const imageExpiry = calculateImageExpiry(Date.now(), imageRetentionDays, visitWindow.validUntil.toMillis());
+      const photoDeliveryType = uploadDeliveryTypes.get(request.photoPublicId) || 'upload';
+      const idImageDeliveryType = request.idImagePublicId
+        ? uploadDeliveryTypes.get(request.idImagePublicId) || 'upload'
+        : null;
 
       transaction.create(visitorRef, {
         firstName: request.firstName,
@@ -166,11 +208,15 @@ export const handler: Handler = async (event) => {
         visitDate: request.visitDate,
         idImagePublicId: request.idImagePublicId,
         photoPublicId: request.photoPublicId,
+        idImageDeliveryType,
+        photoDeliveryType,
         consentAcceptedAt: FieldValue.serverTimestamp(),
         createdAt: FieldValue.serverTimestamp(),
         createdByUid: decoded.uid,
         imagesPurgedAt: null,
-        imagesExpireAt: Timestamp.fromMillis(Date.now() + imageRetentionDays * 86_400_000),
+        imageRetentionDaysApplied: imageRetentionDays,
+        baseImagesExpireAt: imageExpiry.baseImagesExpireAt,
+        imagesExpireAt: imageExpiry.imagesExpireAt,
       });
       transaction.create(passRef, {
         visitorId: request.visitorId,
@@ -178,6 +224,8 @@ export const handler: Handler = async (event) => {
         purpose: request.purpose,
         photoPublicId: request.photoPublicId,
         idImagePublicId: request.idImagePublicId,
+        photoDeliveryType,
+        idImageDeliveryType,
         source,
         status: 'issued',
         validFrom: visitWindow.validFrom,
@@ -216,6 +264,12 @@ export const handler: Handler = async (event) => {
     });
   } catch (error) {
     if (error instanceof RequestError) return jsonResponse(error.statusCode, { error: error.message });
+    if (error instanceof RateLimitError) {
+      return {
+        ...jsonResponse(429, { error: error.message, retryAfterSeconds: error.retryAfterSeconds }),
+        headers: { 'Content-Type': 'application/json', 'Retry-After': String(error.retryAfterSeconds) },
+      };
+    }
     const code = authErrorCode(error);
     if (code?.startsWith('auth/')) return jsonResponse(401, { error: 'Invalid or expired token' });
 

@@ -21,14 +21,14 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { format } from 'date-fns';
+import { addDays, format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { Button, Card, Input, FormField, Stepper, PageShell } from '@/components/ui';
 import { BrandMark } from '@/components/BrandMark';
 import { VisitPurposeField } from '@/components/VisitPurposeField';
 import { DEFAULT_VISIT_PURPOSES, normalizeVisitPurposes } from '@/lib/settingsDefaults';
 import type { VisitPurposeOption } from '@/types';
-import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, normalizeWorkingHours } from '@/lib/workingHours';
+import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, MAX_VISIT_ADVANCE_DAYS, normalizeWorkingHours } from '@/lib/workingHours';
 
 // ============================================================
 // FORM SCHEMA (Zod)
@@ -121,6 +121,7 @@ export function GetPassPage() {
 
   // Get today as min date
   const today = format(new Date(), 'yyyy-MM-dd');
+  const latestVisitDate = format(addDays(new Date(), MAX_VISIT_ADVANCE_DAYS), 'yyyy-MM-dd');
 
   // ============================================================
   // STEP HANDLERS
@@ -389,6 +390,7 @@ export function GetPassPage() {
                   type="date"
                   {...register('visitDate')}
                   min={today}
+                  max={latestVisitDate}
                   error={!!errors.visitDate}
                 />
               </FormField>

@@ -88,6 +88,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
       try {
         const { role, userData } = await resolveRole(user);
 
+        if (!role) {
+          await signOut(auth);
+          setState({
+            status: 'unauthenticated',
+            uid: null,
+            role: null,
+            userData: null,
+          });
+          return;
+        }
+
         if (role === 'admin' || role === 'superadmin' || role === 'guard') {
           await user.reload();
           if (!auth.currentUser?.emailVerified) {

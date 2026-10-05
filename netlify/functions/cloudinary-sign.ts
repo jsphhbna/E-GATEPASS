@@ -4,6 +4,8 @@ import crypto from 'crypto';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { handleAuthError } from './utils/auth';
 import { requireImageUploadActor } from './utils/image-security';
+import { SECURE_IMAGE_DELIVERY_TYPE } from './utils/image-lifecycle';
+import { clientAddressFromHeaders, enforceRateLimit, RateLimitError } from './utils/rate-limit';
 
 // Configure Cloudinary using server-only env vars
 cloudinary.config({
@@ -47,6 +49,13 @@ export const handler: Handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid folder requested' }) };
     }
 
+    await enforceRateLimit(getFirestore(), {
+      operation: 'cloudinary_sign',
+      actorType: actor.type,
+      uid: actor.uid,
+      clientAddress: clientAddressFromHeaders(event.headers),
+    });
+
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
       console.error('Cloudinary signing is missing required configuration');
       return { statusCode: 500, body: JSON.stringify({ error: 'Image upload is not configured' }) };
@@ -76,6 +85,7 @@ export const handler: Handler = async (event) => {
       actorType: actor.type,
       folder: requestedFolder,
       publicId: expectedPublicId,
+      deliveryType: SECURE_IMAGE_DELIVERY_TYPE,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       expiresAt: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000),
@@ -93,9 +103,17 @@ export const handler: Handler = async (event) => {
         uploadPublicId: uploadId,
         expectedPublicId,
         context,
+        deliveryType: SECURE_IMAGE_DELIVERY_TYPE,
       }),
     };
   } catch (error: unknown) {
+    if (error instanceof RateLimitError) {
+      return {
+        statusCode: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': String(error.retryAfterSeconds) },
+        body: JSON.stringify({ error: error.message, retryAfterSeconds: error.retryAfterSeconds }),
+      };
+    }
     console.error('Cloudinary Sign Error:', error);
     return handleAuthError(error);
   }

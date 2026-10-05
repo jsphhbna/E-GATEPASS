@@ -33,8 +33,23 @@ export const handler: Handler = async (event) => {
       return jsonResponse(500, { error: 'Image access is not configured' });
     }
 
-    const imageUrl = cloudinary.url(publicId as string, { secure: true, sign_url: true });
-    const imageResponse = await fetch(imageUrl);
+    const imageUrl = cloudinary.url(publicId as string, {
+      secure: true,
+      sign_url: true,
+      type: reference.deliveryType,
+    });
+    let imageResponse = await fetch(imageUrl);
+    // A legacy asset may already have been converted before its Firestore
+    // delivery metadata was finalized. Try the protected namespace only; never
+    // fall back from authenticated metadata to public delivery.
+    if (!imageResponse.ok && reference.deliveryType === 'upload') {
+      const migratedUrl = cloudinary.url(publicId as string, {
+        secure: true,
+        sign_url: true,
+        type: 'authenticated',
+      });
+      imageResponse = await fetch(migratedUrl);
+    }
     if (!imageResponse.ok) return jsonResponse(404, { error: 'Image not found' });
 
     const contentType = imageResponse.headers.get('Content-Type') || '';

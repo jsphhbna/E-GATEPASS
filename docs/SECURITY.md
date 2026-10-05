@@ -4,7 +4,9 @@ Frontend checks improve UX only. Firestore Rules and Netlify Functions are autho
 
 There is no public Super Admin bootstrap endpoint. Use the authorized manual procedure in [Super Admin Bootstrap](SUPER_ADMIN_BOOTSTRAP.md); protected updates preserve at least one active Super Admin. Devices are authenticated accounts constrained by status, type, and gate.
 
-Cloudinary destructive credentials stay server-side. A public asset ID is not authority: image access needs an authorized application reference. Trusted mutations record audit information; unresolved external partial operations create server-only reconciliation tasks. Review dependency advisories before releases; do not force upgrades or downgrades without compatibility testing.
+Cloudinary destructive credentials stay server-side. New identity images use Cloudinary `authenticated` delivery, and an authorized application reference is required before the backend proxies a signed asset. Legacy `upload` assets remain compatible but require the bounded Super Admin migration documented in [Image Security](IMAGE_SECURITY.md). Trusted mutations record audit information; unresolved external partial operations create server-only reconciliation tasks. Review dependency advisories before releases; do not force upgrades or downgrades without compatibility testing.
+
+Anonymous visitor upload-signing and pass-creation requests are validated before transactional UID and hashed-client-address rate limits are consumed. Limits return HTTP 429 with retry guidance and are not client-controlled. `rateLimits` and cleanup cursor state are denied to all clients by the default Firestore Rules boundary.
 
 Automatic retention permanently protects bootstrap, user role/status, Admin creation/deletion, device creation/deletion/credential, and Settings-change audit actions. Only ordinary old audit events may expire. Unresolved reconciliation tasks never expire automatically.
 

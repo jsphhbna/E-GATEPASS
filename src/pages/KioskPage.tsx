@@ -19,13 +19,13 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { format } from 'date-fns';
+import { addDays, format } from 'date-fns';
 import { Button, Card, Input, FormField, Stepper } from '@/components/ui';
 import { BrandMark } from '@/components/BrandMark';
 import { VisitPurposeField } from '@/components/VisitPurposeField';
 import { DEFAULT_VISIT_PURPOSES, normalizeVisitPurposes } from '@/lib/settingsDefaults';
 import type { VisitPurposeOption } from '@/types';
-import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, normalizeWorkingHours } from '@/lib/workingHours';
+import { DEFAULT_WORKING_HOURS, formatValidityWindow, formatWorkingHours, MAX_VISIT_ADVANCE_DAYS, normalizeWorkingHours } from '@/lib/workingHours';
 
 const nameRegex = /^[\p{L}\s\-'.]+$/u;
 
@@ -114,6 +114,7 @@ export function KioskPage() {
   const purpose = watch('purpose');
 
   const today = format(new Date(), 'yyyy-MM-dd');
+  const latestVisitDate = format(addDays(new Date(), MAX_VISIT_ADVANCE_DAYS), 'yyyy-MM-dd');
 
   function onFormNext(data: KioskPassFormData) {
     void data;
@@ -335,7 +336,7 @@ export function KioskPage() {
               />
 
               <FormField label="Visit Date" id="kiosk-date" error={errors.visitDate?.message}>
-                <Input id="kiosk-date" type="date" {...register('visitDate')} min={today} error={!!errors.visitDate} />
+                <Input id="kiosk-date" type="date" {...register('visitDate')} min={today} max={latestVisitDate} error={!!errors.visitDate} />
               </FormField>
 
               <div className="rounded-xl border border-[var(--color-brand)]/20 bg-[var(--color-brand-light)] p-4">

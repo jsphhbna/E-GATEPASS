@@ -1,12 +1,13 @@
 import { Handler } from '@netlify/functions';
 import { v2 as cloudinary } from 'cloudinary';
-import { getFirestore, FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
+import { FieldPath, getFirestore, FieldValue, Timestamp, type Firestore, type Query, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import crypto from 'crypto';
 import { handleAuthError, requireSuperAdmin } from './utils/auth';
 import { writeAdministrativeAudit, type AuditActorRole } from './utils/audit';
 import { recordReconciliationTask } from './utils/reconciliation';
 import { classifyImageIdentifier, uploadSessionIdFromPublicId } from './utils/image-security';
+import { imageDeliveryTypeForPublicId, normalizeImageDeliveryType, passProtectsImages } from './utils/image-lifecycle';
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -33,6 +34,8 @@ async function cleanupExpiredUploads(db: Firestore, actorUid: string) {
   const snapshot = await db.collection('imageUploads')
     .where('status', '==', 'pending')
     .where('expiresAt', '<=', Timestamp.now())
+    .orderBy('expiresAt', 'asc')
+    .orderBy(FieldPath.documentId(), 'asc')
     .limit(25)
     .get();
   let deletedCount = 0;
@@ -56,7 +59,7 @@ async function cleanupExpiredUploads(db: Firestore, actorUid: string) {
       });
       if (!reserved) continue;
       const result = await cloudinary.uploader.destroy(publicId, {
-        type: 'upload', resource_type: 'image', invalidate: true,
+        type: normalizeImageDeliveryType(data.deliveryType), resource_type: 'image', invalidate: true,
       });
       if (result.result !== 'ok' && result.result !== 'not found') {
         throw new Error(`Unexpected Cloudinary deletion result: ${result.result || 'unknown'}`);
@@ -88,6 +91,45 @@ async function cleanupExpiredUploads(db: Firestore, actorUid: string) {
     .limit(1)
     .get();
   return { attempted: snapshot.size, deletedCount, failedCount, reconciliationCount, hasMore: !remaining.empty };
+}
+
+interface PurgeCursor {
+  sortMillis: number;
+  documentId: string;
+}
+
+function parsePurgeCursor(value: unknown): PurgeCursor | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.sortMillis === 'number' && typeof candidate.documentId === 'string'
+    ? { sortMillis: candidate.sortMillis, documentId: candidate.documentId }
+    : null;
+}
+
+function applyPurgeCursor(query: Query, cursor: PurgeCursor | null): Query {
+  return cursor
+    ? query.startAfter(Timestamp.fromMillis(cursor.sortMillis), cursor.documentId)
+    : query;
+}
+
+async function updatePurgeCursor(
+  db: Firestore,
+  field: string,
+  docs: QueryDocumentSnapshot[],
+  limit: number,
+  sortField: string,
+): Promise<boolean> {
+  const last = docs.at(-1);
+  const sortValue = last?.data()?.[sortField];
+  const sortMillis = typeof sortValue?.toMillis === 'function' ? sortValue.toMillis() : null;
+  const hasMore = docs.length === limit;
+  await db.collection('maintenanceState').doc('imagePurge').set({
+    [field]: hasMore && last && sortMillis !== null
+      ? { sortMillis, documentId: last.id }
+      : null,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return hasMore;
 }
 
 export const handler: Handler = async (event) => {
@@ -158,10 +200,14 @@ export const handler: Handler = async (event) => {
     const legacyCutoff = new Date(Date.now() - legacyRetentionDays * 86_400_000);
     const legacyVisitors = db.collection('visitors')
       .where('imagesPurgedAt', '==', null)
-      .where('createdAt', '<=', legacyCutoff);
+      .where('createdAt', '<=', legacyCutoff)
+      .orderBy('createdAt', 'asc')
+      .orderBy(FieldPath.documentId(), 'asc');
     const scheduledVisitors = db.collection('visitors')
       .where('imagesPurgedAt', '==', null)
-      .where('imagesExpireAt', '<=', Timestamp.now());
+      .where('imagesExpireAt', '<=', Timestamp.now())
+      .orderBy('imagesExpireAt', 'asc')
+      .orderBy(FieldPath.documentId(), 'asc');
 
     if (isDryRun) {
       const [legacySnapshot, scheduledSnapshot, orphanCountSnapshot] = await Promise.all([
@@ -178,32 +224,57 @@ export const handler: Handler = async (event) => {
       });
     }
 
-    // Process a bounded batch so each invocation stays within Netlify's runtime limit.
-    const [legacySnapshot, scheduledSnapshot] = await Promise.all([legacyVisitors.limit(25).get(), scheduledVisitors.limit(25).get()]);
-    const snapshotDocs = [...new Map([...legacySnapshot.docs.filter((item) => item.data().imagesExpireAt == null), ...scheduledSnapshot.docs].map((item) => [item.id, item])).values()].slice(0, 25);
+    // Maintain separate deterministic cursors for legacy and timestamped image
+    // policies. A blocked oldest record is revisited on a later cursor cycle,
+    // but cannot prevent later eligible records from being examined.
+    const state = (await db.collection('maintenanceState').doc('imagePurge').get()).data() || {};
+    const legacyLimit = 12;
+    const scheduledLimit = 13;
+    const [legacySnapshot, scheduledSnapshot] = await Promise.all([
+      applyPurgeCursor(legacyVisitors, parsePurgeCursor(state.legacyCursor)).limit(legacyLimit).get(),
+      applyPurgeCursor(scheduledVisitors, parsePurgeCursor(state.scheduledCursor)).limit(scheduledLimit).get(),
+    ]);
+    const snapshotDocs = [...new Map([
+      ...legacySnapshot.docs.filter((item) => item.data().imagesExpireAt == null),
+      ...scheduledSnapshot.docs,
+    ].map((item) => [item.id, item])).values()];
 
     let successCount = 0;
     let failedCount = 0;
+    let skippedCount = 0;
     let reconciliationCount = 0;
 
     // 4. Process each visitor
     for (const doc of snapshotDocs) {
       const visitor = doc.data();
-      const publicIdsToDestroy: string[] = [];
+      const publicIdsToDestroy: Array<{ publicId: string; deliveryType: 'upload' | 'authenticated' }> = [];
 
-      if (typeof visitor.photoPublicId === 'string') publicIdsToDestroy.push(visitor.photoPublicId);
-      if (typeof visitor.idImagePublicId === 'string') publicIdsToDestroy.push(visitor.idImagePublicId);
+      if (typeof visitor.photoPublicId === 'string') {
+        publicIdsToDestroy.push({ publicId: visitor.photoPublicId, deliveryType: imageDeliveryTypeForPublicId(visitor, visitor.photoPublicId) });
+      }
+      if (typeof visitor.idImagePublicId === 'string') {
+        publicIdsToDestroy.push({ publicId: visitor.idImagePublicId, deliveryType: imageDeliveryTypeForPublicId(visitor, visitor.idImagePublicId) });
+      }
 
       let deletedImageCount = 0;
       try {
-        // Current uploads use Cloudinary's default "upload" delivery type.
+        const [passes, pendingReconciliation] = await Promise.all([
+          db.collection('gatePasses').where('visitorId', '==', doc.id).limit(21).get(),
+          db.collection('reconciliationTasks').where('status', '==', 'pending').where('targetUid', '==', doc.id).limit(1).get(),
+        ]);
+        if (passes.size > 20) throw new Error('Visitor pass count exceeds the bounded image-safety check');
+        if (!pendingReconciliation.empty || passes.docs.some((pass) => passProtectsImages(pass.data().status, pass.data().validUntil))) {
+          skippedCount++;
+          continue;
+        }
+
         if (publicIdsToDestroy.length > 0) {
-          for (const pid of publicIdsToDestroy) {
-            if (classifyImageIdentifier(pid) === 'malformed') {
+          for (const image of publicIdsToDestroy) {
+            if (classifyImageIdentifier(image.publicId) === 'malformed') {
               throw new Error('Stored image identifier is malformed');
             }
-            const result = await cloudinary.uploader.destroy(pid, {
-              type: 'upload',
+            const result = await cloudinary.uploader.destroy(image.publicId, {
+              type: image.deliveryType,
               resource_type: 'image',
               invalidate: true,
             });
@@ -223,27 +294,30 @@ export const handler: Handler = async (event) => {
         successCount++;
       } catch (error) {
         failedCount++;
-        if (deletedImageCount > 0) {
-          const reference = db.collection('reconciliationTasks').doc().id;
-          if (await recordReconciliationTask(db, {
-            reference,
-            operation: 'visitor_image_purge_partial',
-            targetUid: doc.id,
-            actorUid: auditActor.uid,
-            reason: 'At least one visitor image was deleted before the retention purge could be finalized',
-            requiredActions: ['Verify both referenced Cloudinary images', 'Complete deletion and set imagesPurgedAt only after all images are absent'],
-          })) reconciliationCount++;
-        }
+        const reference = `visitor_image_purge_${doc.id}`;
+        if (await recordReconciliationTask(db, {
+          reference,
+          operation: deletedImageCount > 0 ? 'visitor_image_purge_partial' : 'visitor_image_purge_failed',
+          targetUid: doc.id,
+          actorUid: auditActor.uid,
+          reason: deletedImageCount > 0
+            ? 'At least one visitor image was deleted before the retention purge could be finalized'
+            : 'Visitor image retention cleanup could not safely complete',
+          requiredActions: ['Verify both referenced Cloudinary images and delivery types', 'Complete deletion and set imagesPurgedAt only after all images are absent'],
+        })) reconciliationCount++;
         console.error('Failed to delete visitor images', {
           visitorId: doc.id,
+          reference,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     }
 
-    // Check how many remain
-    const [remainingLegacy, remainingScheduled] = await Promise.all([legacyVisitors.limit(2).get(), scheduledVisitors.limit(1).get()]);
-    const hasMoreVisitors = remainingLegacy.docs.some((item) => item.data().imagesExpireAt == null) || !remainingScheduled.empty;
+    const [legacyHasMore, scheduledHasMore] = await Promise.all([
+      updatePurgeCursor(db, 'legacyCursor', legacySnapshot.docs, legacyLimit, 'createdAt'),
+      updatePurgeCursor(db, 'scheduledCursor', scheduledSnapshot.docs, scheduledLimit, 'imagesExpireAt'),
+    ]);
+    const hasMoreVisitors = legacyHasMore || scheduledHasMore || skippedCount > 0 || failedCount > 0;
 
     const orphanCleanup = await cleanupExpiredUploads(db, auditActor.uid);
 
@@ -256,7 +330,7 @@ export const handler: Handler = async (event) => {
           targetType: 'visitor_images',
           targetId: 'retention_batch',
           result: failedCount > 0 ? 'partial' : 'success',
-          metadata: { successCount, failedCount, reconciliationCount, retentionDays, hasMore: hasMoreVisitors },
+          metadata: { scannedCount: snapshotDocs.length, successCount, skippedCount, failedCount, reconciliationCount, retentionDays, hasMore: hasMoreVisitors },
         });
       }
       if (orphanCleanup.attempted > 0) {
@@ -292,6 +366,7 @@ export const handler: Handler = async (event) => {
       return jsonResponse(202, {
         message: `Deleted images for ${successCount} visitors, but audit reconciliation is required.`,
         successCount,
+        skippedCount,
         failedCount,
         orphanDeletedCount: orphanCleanup.deletedCount,
         orphanFailedCount: orphanCleanup.failedCount,
@@ -304,6 +379,7 @@ export const handler: Handler = async (event) => {
     return jsonResponse(200, {
       message: `Deleted images for ${successCount} visitors.`,
       successCount,
+      skippedCount,
       failedCount,
       orphanDeletedCount: orphanCleanup.deletedCount,
       orphanFailedCount: orphanCleanup.failedCount,

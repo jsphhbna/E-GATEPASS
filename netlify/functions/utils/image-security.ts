@@ -1,6 +1,7 @@
 import { getFirestore, type Firestore, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { adminAuth } from '../firebase-admin';
 import type { AuthContext } from './auth';
+import { imageDeliveryTypeForPublicId, type ImageDeliveryType } from './image-lifecycle';
 
 export type ImageIdentifierClass = 'current' | 'legacy_candidate' | 'malformed';
 export type UploadActor = { uid: string; type: 'visitor' | 'kiosk' };
@@ -54,6 +55,7 @@ export async function requireImageUploadActor(authHeader: string | undefined): P
 
 interface ImageReferenceResult {
   classification: Exclude<ImageIdentifierClass, 'malformed'>;
+  deliveryType: ImageDeliveryType;
   visitorReferences: QueryDocumentSnapshot[];
   passReferences: QueryDocumentSnapshot[];
 }
@@ -65,6 +67,7 @@ export async function authorizeReferencedImage(
 ): Promise<ImageReferenceResult> {
   const classification = classifyImageIdentifier(publicId);
   if (classification === 'malformed') throw new ImageAccessError(400, 'Invalid image identifier');
+  const safePublicId = publicId as string;
 
   const [visitorPhotos, visitorIds, passPhotos, passIds] = await Promise.all([
     db.collection('visitors').where('photoPublicId', '==', publicId).limit(5).get(),
@@ -83,5 +86,9 @@ export async function authorizeReferencedImage(
     if (!permitted) throw new ImageAccessError(404, 'Image not found');
   }
 
-  return { classification, visitorReferences, passReferences };
+  const referencedTypes = [...visitorReferences, ...passReferences]
+    .map((reference) => imageDeliveryTypeForPublicId(reference.data(), safePublicId));
+  const deliveryType = referencedTypes.includes('authenticated') ? 'authenticated' : 'upload';
+
+  return { classification, deliveryType, visitorReferences, passReferences };
 }

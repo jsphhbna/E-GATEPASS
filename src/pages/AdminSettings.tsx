@@ -14,6 +14,13 @@ import { useAuth } from '@/hooks/useAuth';
 import { isSuperAdmin } from '@/lib/permissions';
 import { DEFAULT_WORKING_HOURS, normalizeWorkingHours } from '@/lib/workingHours';
 import { DEFAULT_RETENTION_POLICY, normalizeRetentionPolicy } from '@/lib/retentionPolicy';
+import {
+  RETENTION_INPUT_FIELDS,
+  createRetentionInputValues,
+  getRetentionInputError,
+  validateRetentionInputs,
+  type RetentionInputErrors,
+} from '@/lib/retentionInput';
 
 export function AdminSettings() {
   const { role } = useAuth();
@@ -29,6 +36,8 @@ export function AdminSettings() {
     rejectionReasons: [] as string[],
     visitPurposes: [] as VisitPurposeOption[],
   });
+  const [retentionInputs, setRetentionInputs] = useState(() => createRetentionInputValues(DEFAULT_RETENTION_POLICY));
+  const [retentionErrors, setRetentionErrors] = useState<RetentionInputErrors>({});
 
   const [newReason, setNewReason] = useState('');
   const [newPurpose, setNewPurpose] = useState('');
@@ -46,13 +55,15 @@ export function AdminSettings() {
         const snap = await getDoc(doc(db, 'settings', 'app'));
         if (snap.exists()) {
           const data = snap.data();
+          const retentionPolicy = normalizeRetentionPolicy(data);
           setSettings({
-            ...normalizeRetentionPolicy(data),
+            ...retentionPolicy,
             workingHours: normalizeWorkingHours(data.workingHours),
             peakMode: data.peakMode === true,
             rejectionReasons: Array.isArray(data.rejectionReasons) ? data.rejectionReasons : DEFAULT_REJECTION_REASONS,
             visitPurposes: normalizeVisitPurposes(data.visitPurposes),
           });
+          setRetentionInputs(createRetentionInputValues(retentionPolicy));
         } else {
           const defaultSettings = {
             ...DEFAULT_RETENTION_POLICY,
@@ -62,6 +73,7 @@ export function AdminSettings() {
             visitPurposes: DEFAULT_VISIT_PURPOSES,
           };
           setSettings(defaultSettings);
+          setRetentionInputs(createRetentionInputValues(DEFAULT_RETENTION_POLICY));
         }
       } catch (err) {
         console.error(err);
@@ -74,6 +86,15 @@ export function AdminSettings() {
   }, []);
 
   async function handleSave() {
+    const retentionValidation = canManageSecuritySettings
+      ? validateRetentionInputs(retentionInputs)
+      : null;
+    if (retentionValidation && !retentionValidation.success) {
+      setRetentionErrors(retentionValidation.errors);
+      toast.error('Correct the highlighted retention settings before saving');
+      return;
+    }
+    setRetentionErrors({});
     if (settings.workingHours.start >= settings.workingHours.end) {
       toast.error('Campus opening time must be earlier than closing time');
       return;
@@ -95,8 +116,7 @@ export function AdminSettings() {
       };
       const settingsToSave = canManageSecuritySettings
         ? { ...operationalSettings, workingHours: settings.workingHours,
-          visitorRetentionDays: settings.visitorRetentionDays, imageRetentionDays: settings.imageRetentionDays,
-          auditRetentionDays: settings.auditRetentionDays, reconciliationRetentionDays: settings.reconciliationRetentionDays,
+          ...retentionValidation?.data,
           automaticCleanupEnabled: settings.automaticCleanupEnabled }
         : operationalSettings;
       const token = await auth.currentUser?.getIdToken();
@@ -361,6 +381,84 @@ export function AdminSettings() {
           </Card>
 
           <PasswordResetCard />
+
+          {canManageSecuritySettings && <Card className="p-6">
+            <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Premade Visit Purposes</h2>
+            <p className="mb-5 mt-2 text-sm text-[var(--color-text-secondary)]">
+              Visitors can choose these options when requesting a gate pass. They can still select Other and type their own purpose.
+            </p>
+
+            <ul className="divide-y overflow-hidden rounded-lg border border-[var(--color-border)]">
+              {settings.visitPurposes.map((purpose, index) => (
+                <li key={purpose.label} className="p-4 transition-colors hover:bg-[var(--color-canvas)]">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-[var(--color-text-primary)]">{purpose.label}</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => togglePurposeDetails(purpose.label)}
+                        aria-pressed={purpose.requiresDetails}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
+                          purpose.requiresDetails
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand-light)] text-[var(--color-brand)]'
+                            : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-canvas)]'
+                        }`}
+                      >
+                        {purpose.requiresDetails ? 'Details required' : 'Require details'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removePurpose(purpose.label)}
+                        className="rounded-md p-1.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+                        aria-label={`Remove ${purpose.label}`}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  {purpose.requiresDetails && (
+                    <div className="mt-3">
+                      <label htmlFor={`purpose-prompt-${index}`} className="mb-1.5 block text-xs font-semibold text-[var(--color-text-secondary)]">
+                        What should the visitor specify?
+                      </label>
+                      <Input
+                        id={`purpose-prompt-${index}`}
+                        value={purpose.detailPrompt}
+                        onChange={(event) => updatePurposePrompt(purpose.label, event.target.value)}
+                        maxLength={160}
+                        placeholder="e.g. Who is your appointment with?"
+                      />
+                    </div>
+                  )}
+                </li>
+              ))}
+              {settings.visitPurposes.length === 0 && (
+                <li className="p-6 text-center text-sm text-[var(--color-text-muted)]">No visit purposes configured</li>
+              )}
+
+              <li className="flex gap-3 border-t border-[var(--color-border)] bg-[var(--color-canvas)] p-4">
+                <div className="flex-1">
+                  <Input
+                    type="text"
+                    value={newPurpose}
+                    onChange={(event) => setNewPurpose(event.target.value)}
+                    placeholder="Add visit purpose..."
+                    maxLength={100}
+                    aria-label="New visit purpose"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        addPurpose();
+                      }
+                    }}
+                  />
+                </div>
+                <Button onClick={addPurpose} variant="secondary" icon={<Plus className="h-4 w-4" />}>
+                  Add
+                </Button>
+              </li>
+            </ul>
+          </Card>}
         </div>
 
         {canManageSecuritySettings && <div className="grid content-start gap-6">
@@ -370,15 +468,38 @@ export function AdminSettings() {
 
             <p className="mb-5 text-sm text-[var(--color-text-secondary)]">Automatic cleanup uses these policies for new eligible data. Export records needed for long-term archive before their retention deadline.</p>
             <div className="mb-8 grid gap-4 sm:grid-cols-2">
-              {([
-                ['visitorRetentionDays', 'Visitor / visit records', 7, 365],
-                ['imageRetentionDays', 'Visitor images / valid IDs', 1, 90],
-                ['auditRetentionDays', 'Audit logs', 90, 1095],
-                ['reconciliationRetentionDays', 'Reconciliation records', 30, 365],
-              ] as const).map(([field, label, min, max]) => <div key={field}>
+              {RETENTION_INPUT_FIELDS.map(({ field, label, min, max }) => <div key={field}>
                 <label htmlFor={field} className="mb-2 block text-sm font-medium text-[var(--color-text-primary)]">{label} (days)</label>
-                <Input id={field} type="number" min={min} max={max} value={settings[field]}
-                  onChange={(event) => setSettings((current) => ({ ...current, [field]: Number(event.target.value) || min }))} />
+                <Input
+                  id={field}
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={min}
+                  max={max}
+                  value={retentionInputs[field]}
+                  error={Boolean(retentionErrors[field])}
+                  aria-describedby={retentionErrors[field] ? `${field}-error` : undefined}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setRetentionInputs((current) => ({ ...current, [field]: value }));
+                    if (retentionErrors[field]) {
+                      setRetentionErrors((current) => ({
+                        ...current,
+                        [field]: getRetentionInputError(field, value),
+                      }));
+                    }
+                  }}
+                  onBlur={(event) => setRetentionErrors((current) => ({
+                    ...current,
+                    [field]: getRetentionInputError(field, event.target.value),
+                  }))}
+                />
+                {retentionErrors[field] && (
+                  <p id={`${field}-error`} className="mt-1.5 text-xs font-medium text-[var(--color-danger)]" role="alert">
+                    {retentionErrors[field]}
+                  </p>
+                )}
               </div>)}
             </div>
             <label className="mb-8 flex items-center gap-3 text-sm font-medium text-[var(--color-text-primary)]">
@@ -408,85 +529,6 @@ export function AdminSettings() {
               </div>
             </div>
           </Card>
-
-        {/* Visit Purposes */}
-        <Card className="p-6">
-          <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Premade Visit Purposes</h2>
-          <p className="mb-5 mt-2 text-sm text-[var(--color-text-secondary)]">
-            Visitors can choose these options when requesting a gate pass. They can still select Other and type their own purpose.
-          </p>
-
-          <ul className="divide-y overflow-hidden rounded-lg border border-[var(--color-border)]">
-            {settings.visitPurposes.map((purpose, index) => (
-              <li key={purpose.label} className="p-4 transition-colors hover:bg-[var(--color-canvas)]">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-sm font-medium text-[var(--color-text-primary)]">{purpose.label}</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => togglePurposeDetails(purpose.label)}
-                      aria-pressed={purpose.requiresDetails}
-                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] ${
-                        purpose.requiresDetails
-                          ? 'border-[var(--color-brand)] bg-[var(--color-brand-light)] text-[var(--color-brand)]'
-                          : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-canvas)]'
-                      }`}
-                    >
-                      {purpose.requiresDetails ? 'Details required' : 'Require details'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removePurpose(purpose.label)}
-                      className="rounded-md p-1.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
-                      aria-label={`Remove ${purpose.label}`}
-                    >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-                {purpose.requiresDetails && (
-                  <div className="mt-3">
-                    <label htmlFor={`purpose-prompt-${index}`} className="mb-1.5 block text-xs font-semibold text-[var(--color-text-secondary)]">
-                      What should the visitor specify?
-                    </label>
-                    <Input
-                      id={`purpose-prompt-${index}`}
-                      value={purpose.detailPrompt}
-                      onChange={(event) => updatePurposePrompt(purpose.label, event.target.value)}
-                      maxLength={160}
-                      placeholder="e.g. Who is your appointment with?"
-                    />
-                  </div>
-                )}
-              </li>
-            ))}
-            {settings.visitPurposes.length === 0 && (
-              <li className="p-6 text-center text-sm text-[var(--color-text-muted)]">No visit purposes configured</li>
-            )}
-
-            <li className="flex gap-3 border-t border-[var(--color-border)] bg-[var(--color-canvas)] p-4">
-              <div className="flex-1">
-                <Input
-                  type="text"
-                  value={newPurpose}
-                  onChange={(event) => setNewPurpose(event.target.value)}
-                  placeholder="Add visit purpose..."
-                  maxLength={100}
-                  aria-label="New visit purpose"
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      addPurpose();
-                    }
-                  }}
-                />
-              </div>
-              <Button onClick={addPurpose} variant="secondary" icon={<Plus className="h-4 w-4" />}>
-                Add
-              </Button>
-            </li>
-          </ul>
-        </Card>
 
         {/* Rejection Reasons */}
         <Card className="p-6">

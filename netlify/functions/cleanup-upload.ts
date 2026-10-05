@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { handleAuthError } from './utils/auth';
 import { requireImageUploadActor, uploadSessionIdFromPublicId } from './utils/image-security';
 import { recordReconciliationTask } from './utils/reconciliation';
+import { normalizeImageDeliveryType } from './utils/image-lifecycle';
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -54,25 +55,25 @@ export const handler: Handler = async (event) => {
       const reservation = await db.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(sessionRef);
         const session = snapshot.data();
-        if (!snapshot.exists || session?.ownerUid !== actor.uid || session?.publicId !== publicId) return 'not_found' as const;
-        if (session.status === 'claimed') return 'claimed' as const;
-        if (session.status === 'deleted') return 'deleted' as const;
-        if (session.status !== 'pending' && session.status !== 'cleanup_failed') return 'busy' as const;
+        if (!snapshot.exists || session?.ownerUid !== actor.uid || session?.publicId !== publicId) return { state: 'not_found' as const };
+        if (session.status === 'claimed') return { state: 'claimed' as const };
+        if (session.status === 'deleted') return { state: 'deleted' as const };
+        if (session.status !== 'pending' && session.status !== 'cleanup_failed') return { state: 'busy' as const };
         transaction.update(sessionRef, { status: 'cleanup_pending', cleanupRequestedAt: FieldValue.serverTimestamp() });
-        return 'reserved' as const;
+        return { state: 'reserved' as const, deliveryType: normalizeImageDeliveryType(session.deliveryType) };
       });
-      if (reservation === 'not_found') return jsonResponse(404, { error: 'Pending image not found' });
-      if (reservation === 'claimed' || reservation === 'busy') {
+      if (reservation.state === 'not_found') return jsonResponse(404, { error: 'Pending image not found' });
+      if (reservation.state === 'claimed' || reservation.state === 'busy') {
         return jsonResponse(409, { error: 'Image is no longer eligible for upload cleanup' });
       }
-      if (reservation === 'deleted') {
+      if (reservation.state === 'deleted') {
         deletedCount++;
         continue;
       }
 
       try {
         const result = await cloudinary.uploader.destroy(publicId, {
-          type: 'upload', resource_type: 'image', invalidate: true,
+          type: reservation.deliveryType, resource_type: 'image', invalidate: true,
         });
         if (result.result !== 'ok' && result.result !== 'not found') {
           throw new Error(`Unexpected Cloudinary deletion result: ${result.result || 'unknown'}`);

@@ -7,7 +7,7 @@ import {
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { Timestamp } from 'firebase/firestore';
-import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
+import { getFirestore as getAdminFirestore, Timestamp as AdminTimestamp } from 'firebase-admin/firestore';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
 import { beforeAll, afterAll, beforeEach, describe, it } from 'vitest';
@@ -30,7 +30,16 @@ import { handler as imageHandler } from '../netlify/functions/image';
 import { handler as purgeImagesHandler } from '../netlify/functions/purge-images';
 import { handler as cloudinarySignHandler } from '../netlify/functions/cloudinary-sign';
 import { handler as cleanupUploadHandler } from '../netlify/functions/cleanup-upload';
+import { handler as migrateImageDeliveryHandler } from '../netlify/functions/migrate-image-delivery';
 import { authorizeReferencedImage, classifyImageIdentifier, ImageAccessError } from '../netlify/functions/utils/image-security';
+import {
+  calculateImageExpiry,
+  closedPassImageExpiryUpdate,
+  isVisitDateWithinPolicy,
+  passProtectsImages,
+} from '../netlify/functions/utils/image-lifecycle';
+import { enforceRateLimit, RateLimitError } from '../netlify/functions/utils/rate-limit';
+import { cleanupAuditLogs, cleanupExpiredRateLimits, cleanupHistoricalVisits } from '../netlify/functions/utils/retention-maintenance';
 
 let testEnv: RulesTestEnvironment;
 let adminIdToken = '';
@@ -587,12 +596,16 @@ describe('E-GatePass Firestore Rules', () => {
             ...REQUIRED_VISITOR_FIELDS,
             photoPublicId: currentPhotoId,
             idImagePublicId: currentIdImageId,
+            photoDeliveryType: 'authenticated',
+            idImageDeliveryType: 'authenticated',
           }),
           db.collection('gatePasses').doc('pending_image_pass').set({
             ...makeValidPortalPass(anonymousUid),
             visitorId: 'pending_image_visitor',
             photoPublicId: currentPhotoId,
             idImagePublicId: currentIdImageId,
+            photoDeliveryType: 'authenticated',
+            idImageDeliveryType: 'authenticated',
             status: 'pending',
           }),
           db.collection('visitors').doc('legacy_image_visitor').set({
@@ -654,8 +667,10 @@ describe('E-GatePass Firestore Rules', () => {
       if (anonymous.statusCode !== 403) throw new Error(`Expected anonymous denial, received ${anonymous.statusCode}`);
 
       const originalFetch = globalThis.fetch;
+      let fetchedImageUrl = '';
       vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).includes('cloudinary.com')) {
+          fetchedImageUrl = String(input);
           return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'Content-Type': 'image/webp' } });
         }
         return originalFetch(input, init);
@@ -669,6 +684,9 @@ describe('E-GatePass Firestore Rules', () => {
         const response = await imageHandler(event, {} as Parameters<typeof imageHandler>[1]);
         if (!response || response.statusCode !== 200 || response.headers?.['Content-Type'] !== 'image/webp') {
           throw new Error(`Authorized image proxy failed: ${response?.statusCode}`);
+        }
+        if (!fetchedImageUrl.includes('/image/authenticated/')) {
+          throw new Error(`Authorized proxy did not use authenticated delivery: ${fetchedImageUrl}`);
         }
       } finally {
         vi.unstubAllGlobals();
@@ -702,16 +720,31 @@ describe('E-GatePass Firestore Rules', () => {
       if (denied.statusCode !== 403) throw new Error(`Expected staff upload denial, received ${denied.statusCode}`);
       const allowed = await invokeHandler(cloudinarySignHandler, anonymousIdToken, 'POST', { folder: 'e-gatepass/photos' });
       if (allowed.statusCode !== 200) throw new Error(allowed.body);
-      const body = JSON.parse(allowed.body) as { uploadId: string; expectedPublicId: string; context?: string };
+      const body = JSON.parse(allowed.body) as { uploadId: string; expectedPublicId: string; context?: string; deliveryType?: string };
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const session = await context.firestore().collection('imageUploads').doc(body.uploadId).get();
         if (
           session.data()?.ownerUid !== anonymousUid ||
           session.data()?.publicId !== body.expectedPublicId ||
+          session.data()?.deliveryType !== 'authenticated' ||
           session.data()?.status !== 'pending' ||
-          typeof body.context !== 'string'
+          typeof body.context !== 'string' ||
+          body.deliveryType !== 'authenticated'
         ) throw new Error('Upload ownership session was not created correctly');
       });
+    });
+
+    it('rate limits repeated upload signing after validation and returns 429 with retry guidance', async () => {
+      const malformed = await invokeHandler(cloudinarySignHandler, anonymousIdToken, 'POST', { folder: 'not-allowed' });
+      if (malformed.statusCode !== 400) throw new Error('Malformed signing request was not rejected normally');
+      for (let index = 0; index < 8; index++) {
+        const response = await invokeHandler(cloudinarySignHandler, anonymousIdToken, 'POST', { folder: 'e-gatepass/photos' });
+        if (response.statusCode !== 200) throw new Error(`Normal signing request ${index + 1} failed: ${response.body}`);
+      }
+      const limited = await invokeHandler(cloudinarySignHandler, anonymousIdToken, 'POST', { folder: 'e-gatepass/photos' });
+      if (limited.statusCode !== 429 || !limited.headers?.['Retry-After']) {
+        throw new Error(`Signing abuse was not rate limited: ${limited.statusCode}`);
+      }
     });
 
     it('cleans only the same owner pending upload and refuses a claimed upload', async () => {
@@ -720,7 +753,7 @@ describe('E-GatePass Firestore Rules', () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
         await Promise.all([
-          db.collection('imageUploads').doc(pendingId).set({ ownerUid: anonymousUid, publicId: `e-gatepass/photos/${pendingId}`, status: 'pending' }),
+          db.collection('imageUploads').doc(pendingId).set({ ownerUid: anonymousUid, publicId: `e-gatepass/photos/${pendingId}`, deliveryType: 'authenticated', status: 'pending' }),
           db.collection('imageUploads').doc(claimedId).set({ ownerUid: anonymousUid, publicId: `e-gatepass/photos/${claimedId}`, status: 'claimed' }),
         ]);
       });
@@ -730,6 +763,7 @@ describe('E-GatePass Firestore Rules', () => {
         const refused = await invokeHandler(cleanupUploadHandler, anonymousIdToken, 'POST', { publicIds: [`e-gatepass/photos/${claimedId}`] });
         if (cleaned.statusCode !== 200 || refused.statusCode !== 409) throw new Error(`${cleaned.body}\n${refused.body}`);
         if (destroy.mock.calls.length !== 1) throw new Error('Cleanup deleted an ineligible asset');
+        if (destroy.mock.calls[0]?.[1]?.type !== 'authenticated') throw new Error('Cleanup used the wrong delivery type');
       } finally {
         destroy.mockRestore();
       }
@@ -951,6 +985,8 @@ describe('E-GatePass Firestore Rules', () => {
   });
 
   describe('Atomic pass creation and scanner transitions', () => {
+    const futureVisitDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' })
+      .format(new Date(Date.now() + 86_400_000));
     const imageSuffix = (value: string, kind: 'photo' | 'id') =>
       Buffer.from(`${kind}-${value}`).toString('base64url').padEnd(16, 'x').slice(0, 128);
     const passRequest = (visitorId: string, passId: string) => ({
@@ -961,7 +997,7 @@ describe('E-GatePass Firestore Rules', () => {
       lastName: 'Visitor',
       contactNumber: '09171234567',
       purpose: 'Campus meeting',
-      visitDate: '2026-10-03',
+      visitDate: futureVisitDate(),
       photoPublicId: `e-gatepass/photos/${imageSuffix(passId, 'photo')}`,
       idImagePublicId: `e-gatepass/ids/${imageSuffix(passId, 'id')}`,
     });
@@ -975,6 +1011,7 @@ describe('E-GatePass Firestore Rules', () => {
             actorType: ownerUid === 'kiosk_device' ? 'kiosk' : 'visitor',
             folder: publicId.substring(0, publicId.lastIndexOf('/')),
             publicId,
+            deliveryType: 'authenticated',
             status: 'pending',
             createdAt: Timestamp.now(),
             expiresAt: futureTimestamp(),
@@ -1004,8 +1041,8 @@ describe('E-GatePass Firestore Rules', () => {
           db.collection('gatePasses').doc('hours_portal_pass').get(),
           db.collection('gatePasses').doc('hours_kiosk_pass').get(),
         ]);
-        const expectedStart = new Date('2026-10-03T09:15:00+08:00').getTime();
-        const expectedEnd = new Date('2026-10-03T16:30:00+08:00').getTime();
+        const expectedStart = new Date(`${portalRequest.visitDate}T09:15:00+08:00`).getTime();
+        const expectedEnd = new Date(`${portalRequest.visitDate}T16:30:00+08:00`).getTime();
         for (const pass of [portalPass, kioskPass]) {
           if (pass.data()?.validFrom?.toMillis() !== expectedStart || pass.data()?.validUntil?.toMillis() !== expectedEnd) {
             throw new Error('Pass did not use the authoritative working-hours window');
@@ -1025,8 +1062,8 @@ describe('E-GatePass Firestore Rules', () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const pass = await context.firestore().collection('gatePasses').doc('fallback_pass').get();
         if (
-          pass.data()?.validFrom?.toMillis() !== new Date('2026-10-03T08:00:00+08:00').getTime() ||
-          pass.data()?.validUntil?.toMillis() !== new Date('2026-10-03T17:00:00+08:00').getTime()
+          pass.data()?.validFrom?.toMillis() !== new Date(`${request.visitDate}T08:00:00+08:00`).getTime() ||
+          pass.data()?.validUntil?.toMillis() !== new Date(`${request.visitDate}T17:00:00+08:00`).getTime()
         ) throw new Error('Legacy settings fallback was not applied');
       });
     });
@@ -1051,10 +1088,26 @@ describe('E-GatePass Firestore Rules', () => {
         if (visitor.data()?.createdByUid !== anonymousUid || pass.data()?.source !== 'portal') {
           throw new Error('Portal ownership or source was not derived from the anonymous identity');
         }
+        if (visitor.data()?.photoDeliveryType !== 'authenticated' || pass.data()?.idImageDeliveryType !== 'authenticated') {
+          throw new Error('Secure image delivery metadata was not preserved on the visitor and pass');
+        }
+        if (visitor.data()?.imagesExpireAt?.toMillis() < pass.data()?.validUntil?.toMillis()) {
+          throw new Error('Pass validity outlived its identity-image retention');
+        }
         if (pass.data()?.visitorId !== visitor.id || pass.data()?.status !== 'issued') {
           throw new Error('Portal pass lifecycle fields are invalid');
         }
       });
+    });
+
+    it('rate limits repeated anonymous pass creation without weakening normal requests', async () => {
+      for (let index = 0; index < 4; index++) {
+        const request = passRequest(`limited_visitor_${index}`, `limited_pass_${index}`);
+        await seedUploadSessions(anonymousUid, request);
+        const response = await invokeHandler(createPassHandler, anonymousIdToken, 'POST', request);
+        if (index < 3 && response.statusCode !== 201) throw new Error(`Normal pass request ${index + 1} failed: ${response.body}`);
+        if (index === 3 && response.statusCode !== 429) throw new Error(`Pass abuse was not rate limited: ${response.statusCode}`);
+      }
     });
 
     it('allows an active Kiosk but rejects a staff account from pass creation', async () => {
@@ -1101,6 +1154,8 @@ describe('E-GatePass Firestore Rules', () => {
     });
 
     it('commits Entry and Exit transitions with their logs and enforces device mode', async () => {
+      const baseExpiry = Timestamp.fromMillis(Date.now() + 86_400_000);
+      const extendedExpiry = Timestamp.fromMillis(Date.now() + 10 * 86_400_000);
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
         await Promise.all([
@@ -1113,6 +1168,10 @@ describe('E-GatePass Firestore Rules', () => {
           db.collection('gatePasses').doc('exit_atomic_pass').set({
             visitorId: 'exit_atomic_visitor',
             status: 'inside',
+          }),
+          db.collection('visitors').doc('exit_atomic_visitor').set({
+            baseImagesExpireAt: baseExpiry,
+            imagesExpireAt: extendedExpiry,
           }),
         ]);
       });
@@ -1136,9 +1195,10 @@ describe('E-GatePass Firestore Rules', () => {
 
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
-        const [entryPass, exitPass, entryLogs, exitLogs] = await Promise.all([
+        const [entryPass, exitPass, exitVisitor, entryLogs, exitLogs] = await Promise.all([
           db.collection('gatePasses').doc('entry_atomic_pass').get(),
           db.collection('gatePasses').doc('exit_atomic_pass').get(),
+          db.collection('visitors').doc('exit_atomic_visitor').get(),
           db.collection('visitLogs').where('passToken', '==', 'entry_atomic_pass').get(),
           db.collection('visitLogs').where('passToken', '==', 'exit_atomic_pass').get(),
         ]);
@@ -1153,6 +1213,9 @@ describe('E-GatePass Firestore Rules', () => {
         }
         if (exitLogs.size !== 1 || exitLogs.docs[0].data().event !== 'scan_exit') {
           throw new Error('Exit transition log did not commit exactly once');
+        }
+        if (exitVisitor.data()?.imagesExpireAt?.toMillis() !== baseExpiry.toMillis()) {
+          throw new Error('Exit did not return an extended image expiry to its creation-time policy deadline');
         }
       });
     });
@@ -1200,6 +1263,35 @@ describe('E-GatePass Firestore Rules', () => {
           throw new Error('Guard approval log did not commit atomically');
         }
       });
+    });
+
+    it('returns rejected-pass images to their original retention deadline', async () => {
+      const baseExpiry = Timestamp.fromMillis(Date.now() + 86_400_000);
+      const extendedExpiry = Timestamp.fromMillis(Date.now() + 10 * 86_400_000);
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await Promise.all([
+          db.collection('gatePasses').doc('guard_rejected_pass').set({
+            visitorId: 'guard_rejected_visitor',
+            status: 'pending',
+            gate: 'Main Gate',
+          }),
+          db.collection('visitors').doc('guard_rejected_visitor').set({
+            baseImagesExpireAt: baseExpiry,
+            imagesExpireAt: extendedExpiry,
+          }),
+        ]);
+      });
+      const response = await invokeHandler(decideVisitHandler, guardIdToken, 'POST', {
+        passId: 'guard_rejected_pass',
+        decision: 'rejected',
+        reason: 'Not expected today',
+      });
+      if (response.statusCode !== 200) throw new Error(response.body);
+      const visitor = await getAdminFirestore().collection('visitors').doc('guard_rejected_visitor').get();
+      if (visitor.data()?.imagesExpireAt?.toMillis() !== baseExpiry.toMillis()) {
+        throw new Error('Rejected pass retained the future-pass image extension');
+      }
     });
   });
 
@@ -1666,6 +1758,280 @@ describe('E-GatePass Firestore Rules', () => {
       await assertFails(db.collection('gatePasses').doc('valid_pass').update({
         status: 'inside',
       }));
+    });
+  });
+
+  describe('High-finding remediation integration', () => {
+    it('keeps rate-limit and maintenance cursor state server-only', async () => {
+      const db = getSuperAdminContext().firestore();
+      await assertFails(db.collection('rateLimits').get());
+      await assertFails(db.collection('rateLimits').doc('forged').set({ count: 0 }));
+      await assertFails(db.collection('maintenanceState').get());
+      await assertFails(db.collection('maintenanceState').doc('forged').set({ cursor: null }));
+    });
+
+    it('aligns image expiry with pass validity and closes back to the original policy deadline', () => {
+      const now = Date.now();
+      const short = calculateImageExpiry(now, 7, now + 86_400_000);
+      const future = calculateImageExpiry(now, 7, now + 20 * 86_400_000);
+      if (short.imagesExpireAt.toMillis() !== short.baseImagesExpireAt.toMillis()) {
+        throw new Error('Short pass unexpectedly extended image retention');
+      }
+      if (future.imagesExpireAt.toMillis() !== now + 21 * 86_400_000) {
+        throw new Error('Future pass was not protected through its safety margin');
+      }
+      const closedUpdate = closedPassImageExpiryUpdate({
+        baseImagesExpireAt: future.baseImagesExpireAt,
+        imagesExpireAt: future.imagesExpireAt,
+      });
+      if (closedUpdate?.imagesExpireAt.toMillis() !== future.baseImagesExpireAt.toMillis()) {
+        throw new Error('Closed pass did not return to its creation-time retention policy');
+      }
+      if (!passProtectsImages('issued', Timestamp.fromMillis(now + 1_000), now)) throw new Error('Future issued pass was not protected');
+      if (!passProtectsImages('pending', null, now) || !passProtectsImages('inside', null, now)) throw new Error('Active pass was not protected');
+      for (const status of ['rejected', 'exited', 'expired']) {
+        if (passProtectsImages(status, Timestamp.fromMillis(now + 1_000), now)) throw new Error(`Closed ${status} pass remained protected`);
+      }
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(now));
+      const tooFar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(now + 31 * 86_400_000));
+      if (!isVisitDateWithinPolicy(today, now) || isVisitDateWithinPolicy(tooFar, now)) {
+        throw new Error('Visit scheduling boundary was not enforced');
+      }
+    });
+
+    it('enforces UID burst limits without incorrectly merging separate users or storing raw IPs', async () => {
+      process.env.CRON_SECRET = 'test-only-rate-limit-hmac-key';
+      const db = getAdminFirestore();
+      const nowMillis = 1_800_000_000_000;
+      for (let index = 0; index < 3; index++) {
+        await enforceRateLimit(db, {
+          operation: 'create_pass', actorType: 'visitor', uid: 'visitor-a',
+          clientAddress: '203.0.113.10', nowMillis,
+        });
+      }
+      try {
+        await enforceRateLimit(db, {
+          operation: 'create_pass', actorType: 'visitor', uid: 'visitor-a',
+          clientAddress: '203.0.113.10', nowMillis,
+        });
+        throw new Error('Burst abuse was not rate limited');
+      } catch (error) {
+        if (!(error instanceof RateLimitError) || error.statusCode !== 429) throw error;
+      }
+      await enforceRateLimit(db, {
+        operation: 'create_pass', actorType: 'visitor', uid: 'visitor-b',
+        clientAddress: '203.0.113.10', nowMillis,
+      });
+      const stored = await db.collection('rateLimits').get();
+      if (stored.empty || stored.docs.some((item) => JSON.stringify(item.data()).includes('203.0.113.10'))) {
+        throw new Error('Rate-limit state is empty or contains a raw client address');
+      }
+    });
+
+    it('deletes only a bounded page of expired rate-limit records and is safe to repeat', async () => {
+      const db = getAdminFirestore();
+      const expiredAt = AdminTimestamp.fromMillis(Date.now() - 1_000);
+      const activeAt = AdminTimestamp.fromMillis(Date.now() + 86_400_000);
+      const firstBatch = db.batch();
+      for (let index = 0; index < 55; index++) {
+        firstBatch.set(db.collection('rateLimits').doc(`expired_rate_limit_${String(index).padStart(2, '0')}`), {
+          count: 1,
+          expiresAt: AdminTimestamp.fromMillis(expiredAt.toMillis() - index),
+        });
+      }
+      firstBatch.set(db.collection('rateLimits').doc('active_rate_limit'), { count: 1, expiresAt: activeAt });
+      firstBatch.set(db.collection('visitors').doc('rate_limit_cleanup_unrelated'), { keep: true });
+      await firstBatch.commit();
+
+      const first = await cleanupExpiredRateLimits(db, 25);
+      const second = await cleanupExpiredRateLimits(db, 25);
+      const third = await cleanupExpiredRateLimits(db, 25);
+      const fourth = await cleanupExpiredRateLimits(db, 25);
+      if (
+        first.scanned !== 25 || first.deleted !== 25 || !first.hasMore ||
+        second.scanned !== 25 || second.deleted !== 25 || !second.hasMore ||
+        third.scanned !== 5 || third.deleted !== 5 || third.hasMore ||
+        fourth.scanned !== 0 || fourth.deleted !== 0 || fourth.failed !== 0
+      ) {
+        throw new Error(`Expired rate-limit cleanup was not bounded and idempotent: ${JSON.stringify({ first, second, third, fourth })}`);
+      }
+      const [active, unrelated, remainingExpired] = await Promise.all([
+        db.collection('rateLimits').doc('active_rate_limit').get(),
+        db.collection('visitors').doc('rate_limit_cleanup_unrelated').get(),
+        db.collection('rateLimits').where('expiresAt', '<=', AdminTimestamp.now()).get(),
+      ]);
+      if (!active.exists || !unrelated.exists || !remainingExpired.empty) {
+        throw new Error('Rate-limit cleanup affected active or unrelated records');
+      }
+    });
+
+    it('advances past blocked historical records and eventually deletes later eligible records', async () => {
+      const db = getAdminFirestore();
+      const old = Date.now() - 60 * 86_400_000;
+      for (let index = 0; index < 3; index++) {
+        const visitorId = `cursor_visitor_${index}`;
+        const passId = `cursor_pass_${index}`;
+        await db.collection('visitors').doc(visitorId).set({
+          imagesPurgedAt: index < 2 ? null : AdminTimestamp.now(),
+        });
+        await db.collection('gatePasses').doc(passId).set({
+          visitorId,
+          status: 'exited',
+          issuedAt: AdminTimestamp.fromMillis(old + index * 1_000),
+        });
+      }
+      const first = await cleanupHistoricalVisits(db, 30, 2);
+      const second = await cleanupHistoricalVisits(db, 30, 2);
+      if (first.scanned !== 2 || first.skipped !== 2 || !first.hasMore || second.deleted !== 1) {
+        throw new Error(`Cleanup cursor did not make progress: ${JSON.stringify({ first, second })}`);
+      }
+      const [pass, visitor] = await Promise.all([
+        db.collection('gatePasses').doc('cursor_pass_2').get(),
+        db.collection('visitors').doc('cursor_visitor_2').get(),
+      ]);
+      if (pass.exists || visitor.exists) throw new Error('Later eligible records were not deleted parent-last');
+      await cleanupHistoricalVisits(db, 30, 2);
+    });
+
+    it('advances past protected audit history instead of starving ordinary old events', async () => {
+      const db = getAdminFirestore();
+      const old = AdminTimestamp.fromMillis(Date.now() - 400 * 86_400_000);
+      await db.collection('auditLogs').doc('protected_oldest').set({ action: 'initial_superadmin_bootstrapped', timestamp: old });
+      await db.collection('auditLogs').doc('ordinary_later').set({ action: 'visitor_images_purged', timestamp: AdminTimestamp.fromMillis(old.toMillis() + 1_000) });
+      const first = await cleanupAuditLogs(db, 365, 1);
+      const second = await cleanupAuditLogs(db, 365, 1);
+      if (first.skipped !== 1 || second.deleted !== 1) throw new Error('Protected audit event starved ordinary cleanup');
+      if (!(await db.collection('auditLogs').doc('protected_oldest').get()).exists) throw new Error('Protected audit event was deleted');
+    });
+
+    it('migrates legacy delivery only for confirmed Super Admin batches and updates every reference', async () => {
+      process.env.CLOUDINARY_CLOUD_NAME = 'test-cloud';
+      process.env.CLOUDINARY_API_KEY = 'test-key';
+      process.env.CLOUDINARY_API_SECRET = 'test-secret';
+      const publicId = 'e-gatepass/photos/migrationasset0001';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await Promise.all([
+          db.collection('visitors').doc('migration_visitor').set({
+            imagesPurgedAt: null,
+            createdAt: Timestamp.fromMillis(Date.now() - 1_000),
+            photoPublicId: publicId,
+            photoDeliveryType: 'upload',
+            idImagePublicId: null,
+          }),
+          db.collection('gatePasses').doc('migration_pass').set({
+            visitorId: 'migration_visitor',
+            photoPublicId: publicId,
+            photoDeliveryType: 'upload',
+            idImagePublicId: null,
+            status: 'exited',
+          }),
+        ]);
+      });
+      const denied = await invokeHandler(migrateImageDeliveryHandler, adminIdToken, 'POST', { dryRun: true });
+      const unconfirmed = await invokeHandler(migrateImageDeliveryHandler, superAdminIdToken, 'POST', { dryRun: false });
+      if (denied.statusCode !== 403 || unconfirmed.statusCode !== 400) throw new Error('Migration authorization or confirmation failed');
+
+      const rename = vi.spyOn(cloudinary.uploader, 'rename').mockResolvedValue({ type: 'authenticated' } as never);
+      try {
+        const dryRun = await invokeHandler(migrateImageDeliveryHandler, superAdminIdToken, 'POST', { dryRun: true });
+        if (dryRun.statusCode !== 200 || rename.mock.calls.length !== 0) throw new Error('Dry-run mutated Cloudinary');
+        const migrated = await invokeHandler(migrateImageDeliveryHandler, superAdminIdToken, 'POST', {
+          dryRun: false,
+          confirmation: 'MIGRATE LEGACY VISITOR IMAGES',
+        });
+        if (migrated.statusCode !== 200 || rename.mock.calls[0]?.[2]?.to_type !== 'authenticated') {
+          throw new Error(`Migration failed: ${migrated.body}`);
+        }
+        const [visitor, pass] = await Promise.all([
+          getAdminFirestore().collection('visitors').doc('migration_visitor').get(),
+          getAdminFirestore().collection('gatePasses').doc('migration_pass').get(),
+        ]);
+        if (visitor.data()?.photoDeliveryType !== 'authenticated' || pass.data()?.photoDeliveryType !== 'authenticated') {
+          throw new Error('Migrated delivery metadata did not update every reference');
+        }
+      } finally {
+        rename.mockRestore();
+      }
+    });
+
+    it('purges authenticated assets with their delivery type and reconciles partial deletion', async () => {
+      process.env.CLOUDINARY_CLOUD_NAME = 'test-cloud';
+      process.env.CLOUDINARY_API_KEY = 'test-key';
+      process.env.CLOUDINARY_API_SECRET = 'test-secret';
+      const photo = 'e-gatepass/photos/securepurgephoto1';
+      const idImage = 'e-gatepass/ids/securepurgeid0001';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.collection('settings').doc('app').set({ imageRetentionDays: 1 });
+        await db.collection('visitors').doc('secure_purge_visitor').set({
+          imagesPurgedAt: null,
+          createdAt: Timestamp.fromMillis(Date.now() - 5 * 86_400_000),
+          imagesExpireAt: Timestamp.fromMillis(Date.now() - 1_000),
+          photoPublicId: photo,
+          idImagePublicId: idImage,
+          photoDeliveryType: 'authenticated',
+          idImageDeliveryType: 'authenticated',
+        });
+        await db.collection('gatePasses').doc('secure_purge_pass').set({
+          visitorId: 'secure_purge_visitor',
+          status: 'exited',
+          validUntil: Timestamp.fromMillis(Date.now() - 86_400_000),
+        });
+      });
+      const destroy = vi.spyOn(cloudinary.uploader, 'destroy')
+        .mockResolvedValueOnce({ result: 'ok' } as never)
+        .mockRejectedValueOnce(new Error('simulated second delete failure'));
+      try {
+        const response = await invokeHandler(purgeImagesHandler, superAdminIdToken, 'POST', {});
+        if (response.statusCode !== 200 || destroy.mock.calls.some((call) => call[1]?.type !== 'authenticated')) {
+          throw new Error(`Authenticated purge failed: ${response.body}`);
+        }
+        const [visitor, tasks] = await Promise.all([
+          getAdminFirestore().collection('visitors').doc('secure_purge_visitor').get(),
+          getAdminFirestore().collection('reconciliationTasks').where('targetUid', '==', 'secure_purge_visitor').get(),
+        ]);
+        if (visitor.data()?.imagesPurgedAt != null || tasks.empty) {
+          throw new Error('Partial image deletion was finalized or hidden from reconciliation');
+        }
+      } finally {
+        destroy.mockRestore();
+      }
+    });
+
+    it('does not purge a due image while a future-valid issued pass still needs it', async () => {
+      process.env.CLOUDINARY_CLOUD_NAME = 'test-cloud';
+      process.env.CLOUDINARY_API_KEY = 'test-key';
+      process.env.CLOUDINARY_API_SECRET = 'test-secret';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await Promise.all([
+          db.collection('settings').doc('app').set({ imageRetentionDays: 1 }),
+          db.collection('visitors').doc('future_image_protection_visitor').set({
+            imagesPurgedAt: null,
+            createdAt: Timestamp.fromMillis(Date.now() - 5 * 86_400_000),
+            imagesExpireAt: Timestamp.fromMillis(Date.now() - 1_000),
+            photoPublicId: 'e-gatepass/photos/futureprotection001',
+            photoDeliveryType: 'authenticated',
+          }),
+          db.collection('gatePasses').doc('future_image_protection_pass').set({
+            visitorId: 'future_image_protection_visitor',
+            status: 'issued',
+            validUntil: Timestamp.fromMillis(Date.now() + 2 * 86_400_000),
+          }),
+        ]);
+      });
+      const destroy = vi.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' } as never);
+      try {
+        const response = await invokeHandler(purgeImagesHandler, superAdminIdToken, 'POST', {});
+        if (response.statusCode !== 200 || destroy.mock.calls.length !== 0) {
+          throw new Error(`Future-valid pass image was not protected: ${response.body}`);
+        }
+        const visitor = await getAdminFirestore().collection('visitors').doc('future_image_protection_visitor').get();
+        if (visitor.data()?.imagesPurgedAt != null) throw new Error('Protected image was marked as purged');
+      } finally {
+        destroy.mockRestore();
+      }
     });
   });
 });

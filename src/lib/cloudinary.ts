@@ -8,6 +8,7 @@ interface SignatureResponse {
   uploadPublicId: string;
   expectedPublicId: string;
   context: string;
+  deliveryType: 'authenticated';
 }
 
 type UploadFolder = 'e-gatepass/photos' | 'e-gatepass/ids';
@@ -97,7 +98,7 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder: Upload
     throw new Error('Image upload could not be authorized');
   }
 
-  const { timestamp, signature, apiKey, cloudName, uploadPublicId, expectedPublicId, context }: SignatureResponse = await signRes.json();
+  const { timestamp, signature, apiKey, cloudName, uploadPublicId, expectedPublicId, context, deliveryType }: SignatureResponse = await signRes.json();
 
   // 2. Upload directly to Cloudinary
   const formData = new FormData();
@@ -109,7 +110,8 @@ export async function uploadToCloudinary(fileOrBlob: File | Blob, folder: Upload
   formData.append('public_id', uploadPublicId);
   formData.append('context', context);
 
-  const uploadRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+  if (deliveryType !== 'authenticated') throw new Error('Image upload did not receive a secure delivery policy');
+  const uploadRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/${deliveryType}`, {
     method: 'POST',
     body: formData,
   });

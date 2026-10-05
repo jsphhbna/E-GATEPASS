@@ -1,6 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { handleAuthError, requireGuardOrAdmin } from './utils/auth';
+import { closedPassImageExpiryUpdate } from './utils/image-lifecycle';
 
 type Decision = 'approved' | 'rejected';
 
@@ -96,6 +97,9 @@ export const handler: Handler = async (event) => {
         throw new RequestError(409, 'Pass is missing its visitor record');
       }
 
+      const visitorRef = db.collection('visitors').doc(pass.visitorId);
+      const visitorSnapshot = await transaction.get(visitorRef);
+
       const guardName = typeof guardSnapshot.data()?.name === 'string' && guardSnapshot.data()?.name.trim()
         ? guardSnapshot.data()!.name.trim()
         : actor.email;
@@ -115,6 +119,10 @@ export const handler: Handler = async (event) => {
               decidedByUid: actor.uid,
             },
       );
+      if (request.decision === 'rejected') {
+        const expiryUpdate = closedPassImageExpiryUpdate(visitorSnapshot.data());
+        if (visitorSnapshot.exists && expiryUpdate) transaction.update(visitorRef, expiryUpdate);
+      }
 
       transaction.create(visitLogRef, {
         passToken: passRef.id,

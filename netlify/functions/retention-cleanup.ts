@@ -1,17 +1,21 @@
 import { schedule, type HandlerEvent, type HandlerContext } from '@netlify/functions';
 import { handler as purgeImages } from './purge-images';
 import { getFirestore } from 'firebase-admin/firestore';
-import { cleanupAuditLogs, cleanupHistoricalVisits, cleanupResolvedReconciliation } from './utils/retention-maintenance';
+import {
+  cleanupAuditLogs,
+  cleanupExpiredRateLimits,
+  cleanupHistoricalVisits,
+  cleanupResolvedReconciliation,
+  type CleanupResult,
+} from './utils/retention-maintenance';
 import { writeAdministrativeAudit } from './utils/audit';
 
-type CleanupSummary = { scanned: number; eligible: number; deleted: number; skipped: number; failed: number };
-
-async function runCleanupCategory(name: string, operation: () => Promise<CleanupSummary>): Promise<CleanupSummary> {
+async function runCleanupCategory(name: string, operation: () => Promise<CleanupResult>): Promise<CleanupResult> {
   try {
     return await operation();
   } catch (error) {
     console.error(`Scheduled ${name} cleanup failed`, { error: error instanceof Error ? error.message : 'Unknown error' });
-    return { scanned: 0, eligible: 0, deleted: 0, skipped: 0, failed: 1 };
+    return { scanned: 0, eligible: 0, deleted: 0, skipped: 0, failed: 1, hasMore: true, cursorAdvanced: false };
   }
 }
 
@@ -40,8 +44,9 @@ export const handler = schedule('@daily', async () => {
   const visitor = await runCleanupCategory('visitor', () => cleanupHistoricalVisits(db, typeof settings.visitorRetentionDays === 'number' ? settings.visitorRetentionDays : 30));
   const audit = await runCleanupCategory('audit', () => cleanupAuditLogs(db, typeof settings.auditRetentionDays === 'number' ? settings.auditRetentionDays : 365));
   const reconciliation = await runCleanupCategory('reconciliation', () => cleanupResolvedReconciliation(db, typeof settings.reconciliationRetentionDays === 'number' ? settings.reconciliationRetentionDays : 90));
-  const failed = visitor.failed + audit.failed + reconciliation.failed + (!response || response.statusCode >= 400 ? 1 : 0);
-  const categories = { image, visitor, audit, reconciliation };
+  const rateLimitState = await runCleanupCategory('rate-limit state', () => cleanupExpiredRateLimits(db));
+  const failed = visitor.failed + audit.failed + reconciliation.failed + rateLimitState.failed + (!response || response.statusCode >= 400 ? 1 : 0);
+  const categories = { image, visitor, audit, reconciliation, rateLimitState };
   await writeAdministrativeAudit(db, {
     action: 'scheduled_retention_cleanup', actorUid: 'system', actorRole: 'system',
     targetType: 'retention', targetId: 'daily', result: failed ? 'partial' : 'success', metadata: categories,
