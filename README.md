@@ -45,6 +45,18 @@ Production Functions use Node 24 and `NODE_OPTIONS=--experimental-require-module
 
 GitHub `main` is the intended production branch and Netlify deploys it. Firestore rules and indexes are separate and must be deployed explicitly. Client role checks are UX only; Firestore Rules and Netlify Functions are authoritative. Admins operate day-to-day administration; Super Admins retain Admin abilities plus security-sensitive controls; Guards are limited to visit work; devices are limited by active status, type, and gate.
 
+## Security Status
+
+- Internal Security Audit: **PASSED**
+- Overall: **8.6/10**; Security: **8.7/10**
+- Production Readiness: **8.5/10**; School Handoff Readiness: **8.4/10**
+- Audited application commit: `ffa1cbb2c0960aada1947cadb05acd486baf918d`
+- Audit date: 2026-10-06 (Asia/Manila)
+
+Read the [Internal Security Audit Certificate](docs/SECURITY_AUDIT_CERTIFICATE.md), [Security Features and Validation](docs/SECURITY_FEATURES_AND_VALIDATION.md), and [Audit Findings](docs/SECURITY_AUDIT_FINDINGS.md).
+
+This is an internal project audit, not an external security certification or legal compliance certification.
+
 ## Documentation
 
 - [Deployment](docs/DEPLOYMENT.md)

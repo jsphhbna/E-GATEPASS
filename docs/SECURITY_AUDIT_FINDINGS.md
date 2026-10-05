@@ -8,9 +8,76 @@
 
 **Auditor:** automated code/security review
 
-**Result:** certification criteria not met
+**Historical result:** certification criteria not met at the pre-deployment audit stage. The final closure record below supersedes that result for the audited application commit.
 
-## Post-audit hardening status
+## Final production re-audit addendum (2026-10-05)
+
+Application commit `ffa1cbb2c0960aada1947cadb05acd486baf918d` is deployed by Netlify deploy `6ac3be488913450008db6a2f`. The corrected Firestore index is `READY`; the hosted secret scan found no matches; 19 Node `nodejs24.x` Functions, including `migrate-image-delivery` and daily `retention-cleanup`, are deployed. The release remains free-tier compatible: `rateLimits.expiresAt` is ordinary timestamp data and `fieldOverrides` is empty.
+
+The authorized Super Admin reported a completed one-visitor migration: dry run found two legacy images; the confirmed live run migrated both, returned zero failures, zero reconciliation records, and `nextCursor: null`. Netlify production logs independently show the two successful migration invocations followed by successful image-proxy invocations, with no Cloudinary rename, Firestore update, reconciliation, missing-secret, or `ERR_REQUIRE_ESM` error.
+
+This session could not independently read protected Firestore metadata/audit/reconciliation records or issue the representative authorized image request because no authenticated browser session or production staff credential was available. It also could not safely request the legacy unsigned Cloudinary URL without an authenticated record lookup. The migration Function is code-reviewed to require Super Admin, rename only `upload` assets to `authenticated`, update bounded pass references, await its `image_delivery_migration` audit write, and create reconciliation tasks for failures. Those controls, tests, and the reported live response strongly support the migration, but they are not a substitute for the remaining read-only production checks.
+
+| Finding | Current status | Evidence |
+|---|---|---|
+| H-1 Missing retention index | FIXED | Production `gatePasses(status ASC, issuedAt ASC)` index is `READY`. |
+| H-2 Cloudinary direct image exposure | PARTIALLY FIXED | Protected implementation is deployed and the bounded legacy migration reports completion; direct public denial plus protected metadata/audit/reconciliation read-back are still required for certification. |
+| H-3 Anonymous rate limiting | FIXED | Deployed server-side controls and bounded scheduled cleanup; focused tests and full 238/238 emulator suite passed. |
+| H-4 Cleanup starvation/reliability | FIXED | Deployed deterministic cursors, bounded cleanup, reconciliation protection, and progression/idempotency tests. |
+| H-5 Pass/image expiry mismatch | FIXED | Deployed pass-aware expiry handling and emulator lifecycle coverage. |
+
+**Remaining certification blocker:** perform the following read-only checks from an authenticated Super Admin session, without disclosing asset identifiers: confirm migrated visitor/pass delivery metadata is `authenticated`; confirm the `image_delivery_migration` audit reports `migratedImages: 2`, `failedImages: 0`, and `reconciliationCount: 0`; confirm no unresolved migration reconciliation task; confirm `/api/image` returns the representative image body without a reusable Cloudinary URL; and confirm the corresponding unsigned legacy delivery URL is denied or unavailable.
+
+### Current re-audit scorecard
+
+| Aggregate | Score /10 | Basis |
+|---|---:|---|
+| Overall | 7.9 | Four high findings are fixed; one production evidence-dependent high finding remains. |
+| Security | 7.8 | Authenticated delivery is deployed, but direct-public denial is not independently evidenced in this session. |
+| Reliability | 8.4 | Bounded, cursor-based maintenance and reconciliation paths are deployed and emulator-tested. |
+| Frontend | 8.1 | Prior role/layout/retention input fixes are deployed; no new frontend regression is known. |
+| Backend | 8.3 | Independent server authorization, rate limits, audit, and reconciliation controls are deployed. |
+| Production readiness | 7.7 | Healthy deploy, index, functions, and logs; H-2 read-only evidence remains. |
+| School handoff readiness | 8.2 | Environment, cleanup, and recovery documentation is present; complete the H-2 verification record before handoff sign-off. |
+
+No internal security certificate or README passed-status was authorized until the H-2 blocker was closed.
+
+## Final H-2 closure and certification decision (2026-10-06)
+
+The required authenticated production verification was completed after the preceding addendum:
+
+- The bounded Super Admin dry run found one visitor and two legacy images, with no failures or reconciliation records.
+- The confirmed live run migrated both images (`migratedImages: 2`), with `failedImages: 0`, `reconciliationCount: 0`, and `nextCursor: null`.
+- The administrative audit displayed `image delivery migration`, actor `superadmin`, target `visitor_images: bounded_batch`, and result `success`.
+- The protected reconciliation endpoint returned zero unresolved items.
+- An authorized `/api/image` request returned HTTP `200` and `Content-Type: image/webp`.
+- The old unsigned `image/upload` delivery path for the migrated legacy asset returned HTTP `404`; the image was not publicly retrievable from that path.
+
+This is **PRODUCTION-VERIFIED** evidence. It completes the remaining direct-public-delivery, authorized-access, audit, and reconciliation acceptance checks without exposing asset identifiers or credentials.
+
+| Final high finding | Status | Closure evidence |
+|---|---|---|
+| H-1 Missing retention index | FIXED | Production `gatePasses(status ASC, issuedAt ASC)` index is `READY`. |
+| H-2 Cloudinary direct image exposure | FIXED | Authenticated migration completed 2/2; authorized proxy HTTP 200/image-webp; old unsigned upload path HTTP 404; audit success; reconciliation count 0. |
+| H-3 Anonymous rate limiting | FIXED | Server-side quotas, 429 handling, hashed address state, and bounded expiry cleanup were emulator-tested and deployed. |
+| H-4 Cleanup starvation/reliability | FIXED | Deterministic cursors, bounded/idempotent cleanup, protected records, and reconciliation behavior were tested and deployed. |
+| H-5 Pass/image expiry mismatch | FIXED | Pass-aware image expiry/return-to-normal-retention lifecycle was tested and deployed. |
+
+**Final result:** 0 critical and 0 unresolved high findings for the audited application release. The passing internal certificate is scoped to application code commit `ffa1cbb2c0960aada1947cadb05acd486baf918d` and production deploy `6ac3be488913450008db6a2f`; it does not convert this historical findings document into an external certification.
+
+### Final certification scorecard
+
+| Aggregate | Score /10 | Basis |
+|---|---:|---|
+| Overall | 8.6 | All five release-blocking findings are closed with test, code/configuration, and production evidence. |
+| Security | 8.7 | Layered Auth/RBAC, Rules, Functions, protected image delivery, audit, and rate-limit controls. |
+| Reliability | 8.5 | Bounded cursor cleanup, retry-safe behavior, and reconciliation protection; scheduled execution should continue to be monitored. |
+| Frontend | 8.2 | Role-aware UI and protected image presentation; browser E2E coverage remains a future improvement. |
+| Backend | 8.6 | Server-side authorization and lifecycle controls are independently enforced. |
+| Production readiness | 8.5 | Healthy Netlify deploy, ready index, protected image production checks, and clean secret scan. |
+| School handoff readiness | 8.4 | Complete operational/environment documentation; school IT must maintain secret, index, and reconciliation procedures. |
+
+## Historical pre-deployment audit record
 
 The current working tree contains locally validated remediations for H-1 through H-5: the missing index declaration, authenticated image delivery and a bounded legacy-migration Function, backend rate limits, progressive retention cursors, and pass-aware image expiry. The corrected Firestore index configuration was deployed on 2026-10-05; the application code remains uncommitted and undeployed at this point in the record.
 
