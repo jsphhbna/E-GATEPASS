@@ -34,6 +34,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-#AI skills and rules
+# AI skills and rules
 .agents/
-
+GEMINI.md
+scripts/
+v10/
